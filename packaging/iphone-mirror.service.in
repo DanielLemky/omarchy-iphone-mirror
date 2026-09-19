@@ -1,0 +1,11 @@
+[Unit]
+Description=iPhone mirror
+
+[Service]
+Type=simple
+ExecStart="@PYTHON@" "@APP_DIR@/mirror.py" --from-launch-request
+KillMode=mixed
+TimeoutStopSec=25
+Restart=no
+
+# This unit intentionally has no [Install] section. It does not start at login.

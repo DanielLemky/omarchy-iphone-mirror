@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "quantumfire.iphone-mirror",
+  "name": "iPhone Mirror",
+  "version": "0.1.0",
+  "author": "Quantum Fire",
+  "description": "Open, stop, and monitor iPhone Mirror from the Omarchy bar",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "iPhone Mirror",
+    "description": "Open, stop, and monitor iPhone Mirror",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

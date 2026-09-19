@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=@NAME@
+Comment=@COMMENT@
+Exec="@LAUNCHER@" start @CONNECTION_ARGS@
+Icon=phone
+Terminal=false
+Categories=Utility;
+StartupNotify=false

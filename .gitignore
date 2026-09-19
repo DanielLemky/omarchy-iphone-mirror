@@ -1,0 +1,8 @@
+.venv/
+.worktrees/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.rtp
+*.hevc
+*.h264
