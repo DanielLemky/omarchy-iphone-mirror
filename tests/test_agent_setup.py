@@ -132,16 +132,31 @@ class AgentSetupTests(unittest.TestCase):
         self.assertEqual(answer['code'], 'image_mounted')
         change.assert_awaited_once_with('prepare-image', 'test')
 
-    def test_zero_display_features_are_not_reported_as_compatible(self):
-        tunnel = MagicMock()
-        tunnel.return_value.__aenter__.return_value = SimpleNamespace(peer_info={'Services': {'com.apple.coredevice.displayservice': {}}})
-        display = MagicMock()
-        service = display.return_value.__aenter__.return_value
-        service.get_media_support_info = AsyncMock(return_value={'supportedFeatures': 0})
-        with patch.dict(sys.modules, {'connection': SimpleNamespace(get_tunnel=tunnel), 'pymobiledevice3.remote.core_device.display_service': SimpleNamespace(DisplayService=display)}):
-            with self.assertRaises(agent.SetupError) as error:
-                asyncio.run(agent.display_capabilities('test'))
-        self.assertEqual(error.exception.code, 'display_features_unavailable')
+    def test_display_feature_validation_accepts_wire_integers(self):
+        class WireInteger(int):
+            pass
+        cases = [(972, None), (WireInteger(972), None),
+                 (0, 'display_features_unavailable'), (WireInteger(0), 'display_features_unavailable'),
+                 (True, 'unknown_display_features'), (False, 'unknown_display_features'),
+                 (-1, 'unknown_display_features'), (None, 'unknown_display_features'),
+                 ('972', 'unknown_display_features'), (972.0, 'unknown_display_features')]
+        for flags, code in cases:
+            with self.subTest(flags=flags, kind=type(flags).__name__):
+                tunnel = MagicMock()
+                tunnel.return_value.__aenter__.return_value = SimpleNamespace(peer_info={'Services': {'com.apple.coredevice.displayservice': {}}})
+                display = MagicMock()
+                service = display.return_value.__aenter__.return_value
+                service.get_media_support_info = AsyncMock(return_value={'supportedFeatures': flags})
+                with patch.dict(sys.modules, {'connection': SimpleNamespace(get_tunnel=tunnel), 'pymobiledevice3.remote.core_device.display_service': SimpleNamespace(DisplayService=display)}):
+                    if code:
+                        with self.assertRaises(agent.SetupError) as error:
+                            asyncio.run(agent.display_capabilities('test'))
+                        self.assertEqual(error.exception.code, code)
+                    else:
+                        answer = asyncio.run(agent.display_capabilities('test'))
+                        self.assertEqual(answer['supported_media_features'], 972)
+                        self.assertIs(type(answer['supported_media_features']), int)
+                        self.assertFalse(answer['mirroring_verified'])
 
     def test_noninteractive_entrypoint_plan_is_json(self):
         path = Path(__file__).resolve().parents[1] / 'setup-phone.py'

@@ -134,11 +134,12 @@ async def display_capabilities(serial):
         async with DisplayService(rsd) as service:
             response = await service.get_media_support_info()
         flags = response.get('supportedFeatures')
-        if type(flags) is not int or flags < 0:
+        # RemoteXPC decodes integer fields as int subclasses. Reject bool explicitly.
+        if not isinstance(flags, int) or isinstance(flags, bool) or flags < 0:
             raise SetupError('unknown_display_features', 'The display capability response could not be validated.')
         if flags == 0:
             raise SetupError('display_features_unavailable', 'The display service reports zero supported media features. Stop compatibility testing here.')
-        return {'supported_media_features': flags, 'mirroring_verified': False}
+        return {'supported_media_features': int(flags), 'mirroring_verified': False}
 
 
 async def execute(action):

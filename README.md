@@ -9,10 +9,10 @@ An on-demand USB or Wi-Fi mirror application with an optional Omarchy bar plugin
 Run as your normal user in a terminal, not with `sudo`:
 
 ```sh
-curl -fsSL https://github.com/daniellemky/omarchy-iphone-mirror/releases/download/v0.1.0/install-online.sh | bash -s -- --release v0.1.0
+curl -fsSL https://github.com/daniellemky/omarchy-iphone-mirror/releases/download/v0.1.1/install-online.sh | bash -s -- --release v0.1.1
 ```
 
-This installs **v0.1.0 (early alpha)**, not development HEAD or a later release. The guide explains phone trust, Developer Mode, and Wi-Fi pairing. The viewer does not start automatically.
+This installs **v0.1.1 (early alpha)**, not development HEAD or a later release. The guide explains phone trust, Developer Mode, and Wi-Fi pairing. The viewer does not start automatically.
 
 Read the [requirements](#requirements) and [installation details](#installation-details), including how to inspect the script before running it. Close any running mirror before installation.
 
@@ -20,7 +20,7 @@ Read the [requirements](#requirements) and [installation details](#installation-
 
 Copy this prompt into your coding agent:
 
-> Install and set up iPhone Mirror v0.1.0 on this Omarchy machine. Read https://github.com/daniellemky/omarchy-iphone-mirror/blob/master/docs/agent-setup.md and follow its instructions. Use the current v0.1.0 release and skip the interactive phone guide during installation so you can guide me one step at a time. Ask for approval before installing system packages or performing each phone-changing operation. I will enter passcodes and approve prompts on the phone myself. Ask before starting the viewer, then help me test USB and Wi-Fi.
+> Install and set up iPhone Mirror v0.1.1 on this Omarchy machine. Read https://github.com/daniellemky/omarchy-iphone-mirror/blob/master/docs/agent-setup.md and follow its instructions. Use the current v0.1.1 release and skip the interactive phone guide during installation so you can guide me one step at a time. Ask for approval before installing system packages or performing each phone-changing operation. I will enter passcodes and approve prompts on the phone myself. Ask before starting the viewer, then help me test USB and Wi-Fi.
 
 The application owns video, input, and connection management. The plugin calls the application's public commands. It does not handle USB. The separate Bluetooth controller plugin is unchanged.
 
@@ -71,14 +71,14 @@ The alpha command above selects an explicit published version. The script verifi
 The checksum detects corrupt or mismatched downloads. It is not an independent signature: the script, archive, and checksum are trusted GitHub release assets. To inspect the script before running it:
 
 ```sh
-curl -fL -o install-online.sh https://github.com/daniellemky/omarchy-iphone-mirror/releases/download/v0.1.0/install-online.sh
+curl -fL -o install-online.sh https://github.com/daniellemky/omarchy-iphone-mirror/releases/download/v0.1.1/install-online.sh
 less install-online.sh
-bash install-online.sh --release v0.1.0
+bash install-online.sh --release v0.1.1
 ```
 
-For installation without phone setup, append `--skip-phone-setup` to the alpha command, keeping `--release v0.1.0`. Without a terminal, this option is required.
+For installation without phone setup, append `--skip-phone-setup` to the alpha command, keeping `--release v0.1.1`. Without a terminal, this option is required.
 
-There is no stable release yet. Without `--release`, the bootstrap selects only the latest stable release; it will not silently install an alpha. Version v0.1.0 is marked as a pre-release. Do not use the `/releases/latest/download/` install route until a stable release is published.
+There is no stable release yet. Without `--release`, the bootstrap selects only the latest stable release; it will not silently install an alpha. Version v0.1.1 is marked as a pre-release. Do not use the `/releases/latest/download/` install route until a stable release is published.
 
 The downloaded source stays in a unique directory under `${XDG_DATA_HOME:-$HOME/.local/share}/iphone-mirror-releases/`. The script prints the paths for repeating setup and uninstalling. It does not overwrite an existing checkout. A failed application install leaves this source available for a manual retry.
 

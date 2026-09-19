@@ -1,6 +1,6 @@
 # Agent-assisted installation and phone setup
 
-The updated v0.1.0 alpha release includes these commands. Older downloads of v0.1.0 do not; download the current release again before testing. Use the README install command with `--skip-phone-setup` appended, then run these commands from the retained source directory printed by the installer. The existing interactive guide is unchanged. Real-phone validation of the new commands is still pending.
+Use v0.1.1 or later for these commands. Version v0.1.1 fixes a false `unknown_display_features` result caused by rejecting the library's integer types. No phone pairing reset or image remount is needed for that fix. Use the README install command with `--skip-phone-setup` appended, then run these commands from the retained source directory printed by the installer. The existing interactive guide is unchanged. Real-phone validation of the new commands is still pending.
 
 An agent can run computer commands and explain the next phone action. It cannot enter your passcode or approve Trust and Developer Mode prompts for you.
 
