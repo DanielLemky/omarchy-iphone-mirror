@@ -32,6 +32,7 @@ class DirectPlayer:
         self.player = subprocess.Popen([
             'mpv', '--no-config', '--profile=low-latency',
             '--title=iPhone — Mirror', '--geometry=400x870',
+            # Portrait default; InputBridge follows the phone and may swap this.
             '--input-ipc-server='+str(ipc_path), '--osc=no',
             '--cursor-autohide=no', '--input-vo-keyboard=yes',
             '--video-margin-ratio-bottom=0.08',
@@ -210,7 +211,8 @@ class Mirror:
                 tasks = [asyncio.create_task(receiver._udp_recv_and_pipe(transport)),
                          asyncio.create_task(receiver._rtcp_send_loop(transport))]
                 await asyncio.wait_for(self.player_ready.wait(), 15)
-                self.bridge = InputBridge(rsd, str(self.runtime.root/'mpv.sock'))
+                self.bridge = InputBridge(rsd, str(self.runtime.root/'mpv.sock'),
+                                          player_pid=self.player.player.pid)
                 input_task = asyncio.create_task(self.bridge.run())
                 await asyncio.wait_for(self.bridge.ready.wait(), 12)
                 self.runtime.update('running', player_pid=self.player.player.pid)

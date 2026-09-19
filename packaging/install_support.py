@@ -22,7 +22,7 @@ OWNED_NAMES = (
     "desktop_wifi",
     "desktop_auto",
 )
-APP_FILES = ("mirror.py", "usb_input.py", "lifecycle.py", "connection.py", "cli.py", "requirements.txt", "LICENSE", "THIRD_PARTY_NOTICES.md", "setup-phone.py", "phone_setup_agent.py")
+APP_FILES = ("mirror.py", "usb_input.py", "orientation.py", "lifecycle.py", "connection.py", "cli.py", "requirements.txt", "LICENSE", "THIRD_PARTY_NOTICES.md", "setup-phone.py", "phone_setup_agent.py")
 
 
 def fail(message: str) -> "NoReturn":

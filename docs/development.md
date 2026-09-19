@@ -3,12 +3,15 @@
 ## Application
 
 - `mirror.py`: video session, MPV process, control socket, signals, and ordered shutdown.
-- `usb_input.py`: focused-window input, Home/Spotlight toolbar, and explicit clipboard paste.
+- `orientation.py`: portrait/landscape view rotation, window aspect, and HID remapping.
+- `usb_input.py`: focused-window input, Home/Spotlight toolbar, orientation follow, and explicit clipboard paste.
 - `connection.py`: Auto selection, USB transport, and authenticated Wi-Fi discovery.
 - `lifecycle.py`: instance lock, private status, and cleanup.
 - `cli.py`: installed service control.
 
 Each new session selects USB when available, otherwise Wi-Fi. There is no connection selector or settings dialog. Diagnostic CLI transport overrides remain available.
+
+Landscape follow polls SpringBoard `getInterfaceOrientation` on the existing tunnel. It sets MPV `video-rotate` and resizes the window with MPV geometry plus Hyprland `resizewindowpixel` when the player pid is known. Taps are inverse-rotated into the encoded buffer. If iOS later re-encodes a landscape buffer, extra rotation is dropped so the picture is not turned twice. Orientation poll failures are logged by exception type only and do not stop video.
 
 The application reuses pinned pymobiledevice3 RTP/HEVC receiver methods, but does not start its VNC server. MPV decodes the compressed video. Wi-Fi selection temporarily replaces the pinned library's provider selector while its process-wide tunnel lock is held, and restores it in `finally`. This private API dependency needs review when updating pymobiledevice3.
 

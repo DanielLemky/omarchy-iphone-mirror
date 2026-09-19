@@ -27,6 +27,7 @@ The application owns video, input, and connection management. The plugin calls t
 ## Features
 
 - Direct HEVC playback in MPV with low-latency settings and a local cursor.
+- The window follows the phone's portrait and landscape orientation. Taps are remapped to the rotated picture.
 - Taps, drags, vertical wheel scrolling, and focused-window keyboard input over USB or Wi-Fi.
 - Centered Home and Spotlight buttons. Home uses a hardware-button event; Spotlight uses Command+Space. Neither uses a swipe.
 - Input release on focus loss and shutdown. No toggle shortcut is required.
@@ -209,7 +210,7 @@ The prototype sometimes left the developer display service unresponsive after a 
 
 - **Phone calls interrupt mirroring on the tested configuration** (USB, ARM64 Omarchy, iPhone 13, iOS 27.0). Video stopped when a call began, even with the phone screen on. The viewer then closed after 15 seconds without media packets. Starting a new session during the call failed. After the call ends, reopen iPhone Mirror; restarting restored live video without a pairing reset or image remount. Other configurations and call types have not been verified.
 - Lower video latency is confirmed by user testing of the prototype, but it has not been measured end to end.
-- International keyboard layouts, IME, multitouch, and horizontal wheel scrolling are not complete.
+- International keyboard layouts, IME, multitouch, and horizontal wheel scrolling are not complete. Landscape follow uses SpringBoard orientation when that service is available; if the video buffer itself becomes landscape, the window still follows.
 - An input-service failure disables input but leaves video running. A fresh click attempts reconnection without replaying the click or failed keys.
 - The pinned pymobiledevice3 RTP receiver is reused internally. The application does not start a VNC TCP server. It opens the media transport needed to receive the phone stream; this is not a claim that the application opens no network sockets.
 - The complete locked-phone USB unlock flow still needs controlled validation. Passcodes must remain user-entered and must never be logged.
