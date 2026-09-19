@@ -16,6 +16,12 @@ This installs **v0.1.0 (early alpha)**, not development HEAD or a later release.
 
 Read the [requirements](#requirements) and [installation details](#installation-details), including how to inspect the script before running it. Close any running mirror before installation.
 
+### Install with an agent
+
+Copy this prompt into your coding agent:
+
+> Install and set up iPhone Mirror v0.1.0 on this Omarchy machine. Read https://github.com/daniellemky/omarchy-iphone-mirror/blob/master/docs/agent-setup.md and follow its instructions. Use the current v0.1.0 release and skip the interactive phone guide during installation so you can guide me one step at a time. Ask for approval before installing system packages or performing each phone-changing operation. I will enter passcodes and approve prompts on the phone myself. Ask before starting the viewer, then help me test USB and Wi-Fi.
+
 The application owns video, input, and connection management. The plugin calls the application's public commands. It does not handle USB. The separate Bluetooth controller plugin is unchanged.
 
 ## Features
