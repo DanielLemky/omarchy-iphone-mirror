@@ -85,11 +85,13 @@ async def cancel_owned(tasks):
         await asyncio.gather(*owned, return_exceptions=True)
 
 async def close_session(*, bridge, input_task, service, session_id,
-                        stream_tasks, player, transport, pli_tasks=()):
+                        stream_tasks, player, transport, pli_tasks=(), audio=None):
     """Release input, stop device stream, then dismantle the transport.
 
     Returns fixed diagnostic labels only; never exception contents or input.
     The caller retains the tunnel until this function returns.
+    Audio uses the same CoreDevice session as video; it is torn down after
+    the shared stream stop so a second stop is not reported as failure.
     """
     errors = []
     await cancel_owned([input_task])
@@ -103,6 +105,11 @@ async def close_session(*, bridge, input_task, service, session_id,
             await asyncio.wait_for(service.stop_media_stream(session_id), 5)
         except Exception:
             errors.append('stream-stop-failed')
+    if audio is not None:
+        try:
+            await asyncio.wait_for(audio.close(), 5)
+        except Exception:
+            errors.append('audio-stop-failed')
     await cancel_owned([*stream_tasks, *pli_tasks])
     if player is not None:
         try:

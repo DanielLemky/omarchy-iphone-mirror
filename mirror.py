@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 
+from audio import start_system_audio
 from lifecycle import AlreadyRunning, Runtime, close_session, connect_service
 from usb_input import InputBridge
 
@@ -184,6 +185,7 @@ class Mirror:
             receiver = None
             tasks = []
             input_task = None
+            audio = None
             try:
                 service = await connect_service(lambda: DisplayService(rsd))
                 raw, receiver_ip = open_media_receiver(service, (8*1024*1024,4*1024*1024))
@@ -209,6 +211,7 @@ class Mirror:
                 receiver._active_transport = transport
                 tasks = [asyncio.create_task(receiver._udp_recv_and_pipe(transport)),
                          asyncio.create_task(receiver._rtcp_send_loop(transport))]
+                audio = await start_system_audio(rsd, self.session_id)
                 await asyncio.wait_for(self.player_ready.wait(), 15)
                 self.bridge = InputBridge(rsd, str(self.runtime.root/'mpv.sock'))
                 input_task = asyncio.create_task(self.bridge.run())
@@ -241,7 +244,8 @@ class Mirror:
                     bridge=self.bridge, input_task=input_task,
                     service=service, session_id=self.session_id,
                     stream_tasks=tasks, player=self.player, transport=transport,
-                    pli_tasks=receiver._pli_tasks if receiver else ())
+                    pli_tasks=receiver._pli_tasks if receiver else (),
+                    audio=audio)
                 if errors and self.error is None:
                     self.error = ', '.join(errors)
                 # The tunnel remains alive until ALL cleanup above has finished.

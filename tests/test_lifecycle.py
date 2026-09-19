@@ -85,10 +85,13 @@ class CleanupTests(unittest.IsolatedAsyncioTestCase):
         unrelated=asyncio.create_task(asyncio.Event().wait())
         stream=asyncio.create_task(asyncio.Event().wait())
         try:
+            async def audio_close():
+                events.append('audio')
+            audio=Mock(close=AsyncMock(side_effect=audio_close))
             errors=await close_session(bridge=bridge,input_task=None,service=service,
-                session_id='session',stream_tasks=[stream],player=player,transport=transport)
+                session_id='session',stream_tasks=[stream],player=player,transport=transport,audio=audio)
             self.assertEqual(errors,[])
-            self.assertEqual(events,['input','stream-stop','player','transport','service-close'])
+            self.assertEqual(events,['input','stream-stop','audio','player','transport','service-close'])
             self.assertTrue(stream.cancelled())
             self.assertFalse(unrelated.done())
         finally:
