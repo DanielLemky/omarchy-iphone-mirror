@@ -1,15 +1,14 @@
-"""System-audio RTP receive, Opus decode, and local PipeWire playback.
+"""System-audio RTP receive, AAC-ELD decode, and local PipeWire playback.
 
 Apple's CoreDevice display service starts a second RTP stream of the
-phone's speaker mix. Xcode Device Mirroring pairs it with video using
-the same client session id. pymobiledevice3 documents this as AAC-ELD
-and decodes it with macOS AudioToolbox. On the wire the packets are
-Opus CELT (TOC config 17: 48 kHz, two 5 ms frames = 10 ms / 480
-samples). Code-1 packets sometimes carry a trailing pad byte so the
-body length is even.
+phone's speaker mix. The RTP payload is an AAC-ELD access unit for
+480-sample stereo frames at 48 kHz (ASC F8 E6 50 00). Channels are a
+mono mix (L == R); playback uses the left channel. A 1 kHz test tone
+locks to identical 10 ms AUs; FDK-AAC recovers a 1 kHz peak from them.
+pymobiledevice3's macOS path uses AudioToolbox with a related cookie.
 
-Audio is optional. A start or decode failure leaves video and input
-running. Payloads, PCM, and device identifiers are never logged.
+Audio is optional. A decode miss skips the packet and does not stop
+video. Payloads, PCM, and device identifiers are never logged.
 """
 from __future__ import annotations
 
@@ -29,12 +28,15 @@ from lifecycle import connect_service
 log = logging.getLogger('iphone-mirror.audio')
 
 PCM_RATE = 48000
-PCM_CHANNELS = 1  # CoreDevice CELT is a mono mix; TOC s-bit is 0
-PCM_FRAME_SAMPLES = 480  # 10 ms at 48 kHz (two Opus CELT 5 ms frames)
+PCM_CHANNELS = 1
+PCM_FRAME_SAMPLES = 480  # AAC-ELD 10 ms at 48 kHz
 PCM_FRAME_BYTES = PCM_FRAME_SAMPLES * PCM_CHANNELS * 2
 RTCP_INTERVAL = 1.0
 RECV_ERR_RECREATE = 5
 OPUS_MAX_FRAME = 5760
+# FDK stereo 480-sample ELD ASC. Apple's handshake cookie F8 E6 40 00 is
+# the 512-sample variant; AudioToolbox and this path use 480.
+ELD_ASC_48K_STEREO_480 = bytes((0xF8, 0xE6, 0x50, 0x00))
 
 
 def rtp_payload(packet: bytes) -> bytes | None:
@@ -88,6 +90,99 @@ def build_rtcp_rr(local_ssrc: int, remote_ssrc: int, highest_seq: int) -> bytes:
     )
     sdes = struct.pack('!BBHIBBBB', 0x81, 0xCA, 2, local_ssrc & 0xFFFFFFFF, 0x01, 0x00, 0x00, 0x00)
     return rr + sdes
+
+
+def unwrap_coredevice_au(payload: bytes) -> bytes:
+    """Return the AAC-ELD access unit from a CoreDevice RTP payload.
+
+    The payload is the AU. No RFC 3640 header and no extra Viceroy prefix.
+    """
+    if not payload:
+        return b''
+    return payload
+
+
+def decode_coredevice_frame(decoder, payload: bytes) -> bytes:
+    """Unwrap and decode one RTP audio payload to packed s16le mono PCM."""
+    au = unwrap_coredevice_au(payload)
+    if not au or decoder is None:
+        return b''
+    return decoder.decode(au)
+
+
+class Eld480Decoder:
+    """AAC-ELD 48 kHz 480-sample stereo AU -> s16le mono PCM via libfdk-aac."""
+
+    def __init__(self):
+        name = ctypes.util.find_library('fdk-aac') or 'libfdk-aac.so.2'
+        lib = ctypes.CDLL(name)
+        lib.aacDecoder_Open.restype = ctypes.c_void_p
+        lib.aacDecoder_Open.argtypes = [ctypes.c_uint, ctypes.c_uint]
+        lib.aacDecoder_Close.argtypes = [ctypes.c_void_p]
+        lib.aacDecoder_ConfigRaw.restype = ctypes.c_uint
+        lib.aacDecoder_ConfigRaw.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),
+            ctypes.POINTER(ctypes.c_uint),
+        ]
+        lib.aacDecoder_Fill.restype = ctypes.c_uint
+        lib.aacDecoder_Fill.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),
+            ctypes.POINTER(ctypes.c_uint),
+            ctypes.POINTER(ctypes.c_uint),
+        ]
+        lib.aacDecoder_DecodeFrame.restype = ctypes.c_uint
+        lib.aacDecoder_DecodeFrame.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int, ctypes.c_uint,
+        ]
+        handle = lib.aacDecoder_Open(0, 1)
+        if not handle:
+            raise RuntimeError('aac decoder open failed')
+        cookie = (ctypes.c_ubyte * len(ELD_ASC_48K_STEREO_480)).from_buffer_copy(ELD_ASC_48K_STEREO_480)
+        cookie_ptr = ctypes.cast(cookie, ctypes.POINTER(ctypes.c_ubyte))
+        err = lib.aacDecoder_ConfigRaw(
+            handle,
+            (ctypes.POINTER(ctypes.c_ubyte) * 1)(cookie_ptr),
+            (ctypes.c_uint * 1)(len(ELD_ASC_48K_STEREO_480)),
+        )
+        if err:
+            lib.aacDecoder_Close(handle)
+            raise RuntimeError('aac decoder config failed')
+        self._lib = lib
+        self._handle = handle
+        self._pcm = (ctypes.c_int16 * (PCM_FRAME_SAMPLES * 2))()
+        self._cookie = cookie
+
+    def decode(self, au: bytes) -> bytes:
+        if not au or self._handle is None:
+            return b''
+        buf = (ctypes.c_ubyte * len(au)).from_buffer_copy(au)
+        buf_ptr = ctypes.cast(buf, ctypes.POINTER(ctypes.c_ubyte))
+        size = ctypes.c_uint(len(au))
+        valid = ctypes.c_uint(len(au))
+        fill = self._lib.aacDecoder_Fill(
+            self._handle,
+            (ctypes.POINTER(ctypes.c_ubyte) * 1)(buf_ptr),
+            ctypes.byref(size),
+            ctypes.byref(valid),
+        )
+        if fill:
+            return b''
+        err = self._lib.aacDecoder_DecodeFrame(self._handle, self._pcm, PCM_FRAME_SAMPLES * 2, 0)
+        if err:
+            return b''
+        # Interleaved stereo, L == R; emit packed mono s16le.
+        mono = (ctypes.c_int16 * PCM_FRAME_SAMPLES)()
+        for i in range(PCM_FRAME_SAMPLES):
+            mono[i] = self._pcm[i * 2]
+        return ctypes.string_at(mono, PCM_FRAME_SAMPLES * 2)
+
+    def close(self):
+        handle = self._handle
+        self._handle = None
+        if handle:
+            self._lib.aacDecoder_Close(handle)
 
 
 def prepare_opus_packet(payload: bytes) -> bytes:
@@ -273,7 +368,7 @@ class AudioSession:
                 if decoder is None or player is None:
                     continue
                 try:
-                    pcm = decoder.decode(payload)
+                    pcm = decode_coredevice_frame(decoder, payload)
                     errors = 0
                 except Exception as error:
                     errors += 1
@@ -282,7 +377,11 @@ class AudioSession:
                         log.warning('Audio decode failed (%s); video continues', type(error).__name__)
                     if errors >= RECV_ERR_RECREATE:
                         try:
-                            self._decoder = OpusDecoder()
+                            old = self._decoder
+                            self._decoder = Eld480Decoder()
+                            if old is not None:
+                                with contextlib.suppress(Exception):
+                                    old.close()
                             errors = 0
                         except Exception:
                             pass
@@ -349,7 +448,7 @@ async def start_system_audio(rsd, session_id):
     player = None
     decoder = None
     try:
-        decoder = OpusDecoder()
+        decoder = Eld480Decoder()
         player = PcmPlayer()
         service = await connect_service(lambda: DisplayService(rsd))
         transport, receiver_ip = open_media_receiver(service, (4 * 1024 * 1024, 1 * 1024 * 1024))

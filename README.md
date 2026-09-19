@@ -27,7 +27,7 @@ The application owns video, input, and connection management. The plugin calls t
 ## Features
 
 - Direct HEVC playback in MPV with low-latency settings and a local cursor.
-- Plays the phone's speaker mix over a second CoreDevice RTP stream (Opus CELT 48 kHz, 10 ms). Video continues if audio cannot start.
+- Plays the phone's speaker mix over a second CoreDevice RTP stream (AAC-ELD 48 kHz, 10 ms). Video continues if audio cannot start.
 - Taps, drags, vertical wheel scrolling, and focused-window keyboard input over USB or Wi-Fi.
 - Centered Home and Spotlight buttons. Home uses a hardware-button event; Spotlight uses Command+Space. Neither uses a swipe.
 - Input release on focus loss and shutdown. No toggle shortcut is required.
@@ -212,7 +212,7 @@ The prototype sometimes left the developer display service unresponsive after a 
 - Lower video latency is confirmed by user testing of the prototype, but it has not been measured end to end.
 - International keyboard layouts, IME, multitouch, and horizontal wheel scrolling are not complete.
 - An input-service failure disables input but leaves video running. A fresh click attempts reconnection without replaying the click or failed keys.
-- Audio is the phone's system output only (currently a mono mix played as stereo). There is no microphone capture and no audio sent to the phone. Audio start or decode failure leaves video running.
+- Audio is the phone's system output only (a mono mix). There is no microphone capture and no audio sent to the phone. Audio start or decode failure leaves video running.
 - The pinned pymobiledevice3 RTP receiver is reused internally. The application does not start a VNC TCP server. It opens the media transport needed to receive the phone stream; this is not a claim that the application opens no network sockets.
 - The complete locked-phone USB unlock flow still needs controlled validation. Passcodes must remain user-entered and must never be logged.
 

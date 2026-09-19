@@ -1,11 +1,28 @@
 import asyncio
+import math
 import struct
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 from audio import (
-    AudioSession, build_rtcp_rr, extend_seq, prepare_opus_packet, rtp_payload,
+    AudioSession, build_rtcp_rr, decode_coredevice_frame, extend_seq,
+    prepare_opus_packet, rtp_payload, unwrap_coredevice_au,
 )
+
+FIXTURE_1KHZ = Path(__file__).resolve().parent / 'fixtures' / 'coredevice-1khz.au'
+
+
+def goertzel_power(samples, freq, rate=48000):
+    n = len(samples)
+    k = int(0.5 + n * freq / rate)
+    omega = 2 * math.pi * k / n
+    coeff = 2 * math.cos(omega)
+    s0 = s1 = s2 = 0.0
+    for x in samples:
+        s0 = x + coeff * s1 - s2
+        s2, s1 = s1, s0
+    return (s1 * s1 + s2 * s2 - coeff * s1 * s2) / n
 
 
 class RtpTests(unittest.TestCase):
@@ -77,6 +94,30 @@ class DecoderTests(unittest.TestCase):
         self.assertTrue(command)
         self.assertIn(command[0].rsplit('/', 1)[-1], {'pw-cat', 'paplay', 'mpv'})
 
+    def test_unwrap_is_identity_for_coredevice_payload(self):
+        payload = FIXTURE_1KHZ.read_bytes()
+        self.assertEqual(unwrap_coredevice_au(payload), payload)
+        self.assertEqual(unwrap_coredevice_au(b''), b'')
+
+    def test_1khz_fixture_peaks_at_1000_not_100(self):
+        from audio import Eld480Decoder
+        au = FIXTURE_1KHZ.read_bytes()
+        self.assertGreater(len(au), 64)
+        decoder = Eld480Decoder()
+        try:
+            pcm = bytearray()
+            for _ in range(16):
+                pcm.extend(decode_coredevice_frame(decoder, au))
+        finally:
+            decoder.close()
+        self.assertGreater(len(pcm), 480 * 2 * 4)
+        samples = struct.unpack('<' + 'h' * (len(pcm) // 2), bytes(pcm))
+        # Skip overlap-add priming frames.
+        sig = samples[960:]
+        p1000 = goertzel_power(sig, 1000)
+        p100 = goertzel_power(sig, 100)
+        self.assertGreater(p1000, p100 * 100)
+
 
 class SessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_close_is_idempotent_and_cancels_tasks(self):
@@ -97,7 +138,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_startup_failure_does_not_raise(self):
         from audio import start_system_audio
-        with patch('audio.OpusDecoder', side_effect=RuntimeError('no decoder')):
+        with patch('audio.Eld480Decoder', side_effect=RuntimeError('no decoder')):
             self.assertIsNone(await start_system_audio(Mock(), 'sid'))
 
 
