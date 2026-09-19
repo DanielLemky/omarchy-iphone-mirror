@@ -41,7 +41,7 @@ The application owns video, input, and connection management. The plugin calls t
 - A trusted iPhone with Developer Mode enabled.
 - A mounted developer image that provides the CoreDevice display and input services.
 - Tested phone: iPhone 13, iOS 27.0 build 24A437, developer image 27A5228h.
-- ARM64 Omarchy is the reference test host. Intel/x86-64 USB worked in a manual test, but Intel testing remains incomplete after repeated Wi-Fi playback failures. Intel support is not verified.
+- ARM64 Omarchy is the reference test host. Intel/x86-64 USB worked in a manual test. One later Intel test with an iPhone 15 Pro Max on iOS 27.2 also had working Wi-Fi video and input; an earlier Intel iPhone 13 Wi-Fi session still failed with `player-backlog`. Intel support is not verified.
 
 Compatibility with other models and versions is not yet established. AssistiveTouch and Bluetooth input are not required. If the Bluetooth controller is running, leave it in computer mode while using this application.
 
@@ -53,10 +53,11 @@ These are results from specific phones and software combinations, not a complete
 | --- | --- | --- |
 | ARM64 Omarchy | iPhone 13, iOS 27.0 build 24A437, developer image 27A5228h | USB and Wi-Fi mirroring and input worked in manual tests. |
 | Intel/x86-64 Omarchy | Known-working iPhone 13, iOS 27.0, developer image 27A5228h | The user confirmed USB was working. Wi-Fi opened but stopped with `player-backlog`; the failure repeated. Individual input checks have not been recorded separately. Intel support remains unverified. |
+| Intel/x86-64 Omarchy | iPhone 15 Pro Max, iOS 27.2, developer image 27A5228h | USB and Wi-Fi mirroring and input worked in manual tests. |
 | Intel/x86-64 Omarchy | Second test phone, iOS 17.1.1 | The current USB tunnel requires iOS 17.4 or later. Wi-Fi connected and the display service was present, but it reported zero supported media features; video startup failed. |
 | Intel/x86-64 Omarchy | Same second phone after updating to iOS 18.7.10, developer image 27A5228h | The image mounted and the USB tunnel connected. The display service still reported zero supported media features; usable mirroring was not established. |
 
-The second phone's model has not been recorded. These results do not prove that all iOS 17 or 18 devices fail, that iOS 27 is required, or that Intel is the cause. The known-working iOS 27 phone also worked over USB on Intel. A mounted image and an advertised display service do not by themselves establish mirroring support.
+The second phone's model has not been recorded. These results do not prove that all iOS 17 or 18 devices fail, that iOS 27 is required, or that Intel is the cause. The known-working iOS 27 phone also worked over USB on Intel. A separate Intel test with an iPhone 15 Pro Max on iOS 27.2 had USB and Wi-Fi video and input working in one session; that does not establish general Intel or 15 Pro Max support. A mounted image and an advertised display service do not by themselves establish mirroring support.
 
 The Intel machine also has other video and suspend problems. These do not establish the cause of the mirror failure. A diagnostic test showed software HEVC decoding at about one CPU core's capacity with the app's one-thread setting. A temporary hardware-decoding test was inconclusive. Decoder settings remain unchanged; ARM64 remains the release-test reference.
 
