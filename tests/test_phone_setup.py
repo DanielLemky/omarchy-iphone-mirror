@@ -85,6 +85,16 @@ class PhoneSetupTests(unittest.TestCase):
         self.assertIn('Close the viewer with Super + W.',text)
         self.assertIn('or when a USB cable is connected.',text)
 
+    def test_guide_names_pairing_record_locations(self):
+        with patch.object(setup,'confirm',return_value=True), \
+             patch.object(setup,'run_tool',side_effect=[json.dumps(['test-device']),'','','','']), \
+             patch('builtins.print') as output:
+            setup.prepare()
+        text='\n'.join(str(call.args[0]) for call in output.call_args_list if call.args)
+        self.assertIn('/var/lib/lockdown',text)
+        self.assertIn('~/.local/share/pymobiledevice3',text)
+        self.assertIn('Uninstalling this application does not delete them.',text)
+
     def test_multiple_devices_block_changes(self):
         with patch.object(setup,'confirm',return_value=True), \
              patch.object(setup,'run_tool',return_value=json.dumps(['one','two'])) as run,patch('builtins.print'):

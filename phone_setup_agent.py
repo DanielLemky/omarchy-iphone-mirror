@@ -203,7 +203,7 @@ def main(argv):
                           'Approve revealing Developer Mode', 'Enable and confirm Developer Mode on the phone',
                           'Approve developer image preparation', 'Approve optional Wi-Fi pairing',
                           'Check display capabilities', 'Ask before viewer and input tests'],
-                'security': 'Developer Mode reduces device security. Trusted computers can access developer services. Protect pairing records. Turning off Developer Mode does not remove trust.',
+                'security': 'Developer Mode reduces device security. Trusted computers can access developer services. USB pairing files are usually /var/lib/lockdown on Linux; Wi-Fi records and downloaded images use ~/.local/share/pymobiledevice3. Do not paste those files or device identifiers into reports. Uninstalling does not delete them. Turning off Developer Mode does not remove trust.',
                 'human_only': ['Passcode entry', 'Trust prompt', 'Developer Mode enable, restart, and Turn On confirmation'],
             })
         else:

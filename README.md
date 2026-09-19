@@ -141,7 +141,7 @@ Connecting or removing a cable does not change an active session. Close and reop
 
 Explicit CLI options remain available for diagnostics: `--connection usb`, `--connection wifi`, and `--serial DEVICE_UDID`.
 
-Wi-Fi requires an existing CoreDevice pairing record and a local network connection between the computer and phone. Discovery replaces fixed IP addresses. The application does not create new pairing records or change firewall settings. It rejects the iPhone USB-tethering interface in Wi-Fi mode. If several saved phone pairing records exist, use `--serial` to select one.
+Wi-Fi requires an existing CoreDevice pairing record and a local network connection between the computer and phone. On Linux that record is stored under `~/.local/share/pymobiledevice3/`. Discovery replaces fixed IP addresses. The application does not create new pairing records or change firewall settings. It rejects the iPhone USB-tethering interface in Wi-Fi mode. If several saved phone pairing records exist, use `--serial` to select one.
 
 Wi-Fi video and input were tested with the USB cable disconnected. The user confirmed good operation. Locked-phone startup and network-loss recovery still need controlled testing.
 
@@ -160,7 +160,7 @@ To remove the application:
 ./uninstall.sh
 ```
 
-Removal stops the mirror and removes only its application, command, service, and launcher files. It keeps UI configuration, phone pairing records, developer images, and unrelated integrations. The optional Omarchy plugin must be removed separately if you installed it.
+Removal stops the mirror and removes only its application, command, service, and launcher files. It keeps UI configuration, phone pairing records, developer images, and unrelated integrations. On Linux, USB pairing files usually remain in `/var/lib/lockdown/`, and Wi-Fi records plus downloaded images remain under `~/.local/share/pymobiledevice3/`. The optional Omarchy plugin must be removed separately if you installed it. See [phone setup](docs/phone-setup.md#pairing-records-on-this-computer).
 
 ## Optional Omarchy plugin
 
