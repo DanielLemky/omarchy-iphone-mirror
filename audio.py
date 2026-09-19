@@ -2,9 +2,9 @@
 
 Apple's CoreDevice display service starts a second RTP stream of the
 phone's speaker mix. The RTP payload is an AAC-ELD access unit for
-480-sample stereo frames at 48 kHz (ASC F8 E6 50 00). Channels are a
-mono mix (L == R); playback uses the left channel. A 1 kHz test tone
-locks to identical 10 ms AUs; FDK-AAC recovers a 1 kHz peak from them.
+480-sample stereo frames at 48 kHz (ASC F8 E6 50 00). Playback is
+interleaved s16le stereo. A 1 kHz test tone locks to identical 10 ms
+AUs; FDK-AAC recovers a 1 kHz peak from them.
 pymobiledevice3's macOS path uses AudioToolbox with a related cookie.
 
 Audio is optional. A decode miss skips the packet and does not stop
@@ -28,7 +28,7 @@ from lifecycle import connect_service
 log = logging.getLogger('iphone-mirror.audio')
 
 PCM_RATE = 48000
-PCM_CHANNELS = 1
+PCM_CHANNELS = 2
 PCM_FRAME_SAMPLES = 480  # AAC-ELD 10 ms at 48 kHz
 PCM_FRAME_BYTES = PCM_FRAME_SAMPLES * PCM_CHANNELS * 2
 RTCP_INTERVAL = 1.0
@@ -103,7 +103,7 @@ def unwrap_coredevice_au(payload: bytes) -> bytes:
 
 
 def decode_coredevice_frame(decoder, payload: bytes) -> bytes:
-    """Unwrap and decode one RTP audio payload to packed s16le mono PCM."""
+    """Unwrap and decode one RTP audio payload to packed s16le stereo PCM."""
     au = unwrap_coredevice_au(payload)
     if not au or decoder is None:
         return b''
@@ -111,7 +111,7 @@ def decode_coredevice_frame(decoder, payload: bytes) -> bytes:
 
 
 class Eld480Decoder:
-    """AAC-ELD 48 kHz 480-sample stereo AU -> s16le mono PCM via libfdk-aac."""
+    """AAC-ELD 48 kHz 480-sample stereo AU -> s16le stereo PCM via libfdk-aac."""
 
     def __init__(self):
         name = ctypes.util.find_library('fdk-aac') or 'libfdk-aac.so.2'
@@ -151,7 +151,7 @@ class Eld480Decoder:
             raise RuntimeError('aac decoder config failed')
         self._lib = lib
         self._handle = handle
-        self._pcm = (ctypes.c_int16 * (PCM_FRAME_SAMPLES * 2))()
+        self._pcm = (ctypes.c_int16 * (PCM_FRAME_SAMPLES * PCM_CHANNELS))()
         self._cookie = cookie
 
     def decode(self, au: bytes) -> bytes:
@@ -169,14 +169,12 @@ class Eld480Decoder:
         )
         if fill:
             return b''
-        err = self._lib.aacDecoder_DecodeFrame(self._handle, self._pcm, PCM_FRAME_SAMPLES * 2, 0)
+        err = self._lib.aacDecoder_DecodeFrame(
+            self._handle, self._pcm, PCM_FRAME_SAMPLES * PCM_CHANNELS, 0,
+        )
         if err:
             return b''
-        # Interleaved stereo, L == R; emit packed mono s16le.
-        mono = (ctypes.c_int16 * PCM_FRAME_SAMPLES)()
-        for i in range(PCM_FRAME_SAMPLES):
-            mono[i] = self._pcm[i * 2]
-        return ctypes.string_at(mono, PCM_FRAME_SAMPLES * 2)
+        return ctypes.string_at(self._pcm, PCM_FRAME_BYTES)
 
     def close(self):
         handle = self._handle
@@ -268,7 +266,7 @@ def _pcm_player_command():
             '--demuxer-rawaudio-format=s16le',
             f'--demuxer-rawaudio-rate={PCM_RATE}',
             f'--demuxer-rawaudio-channels={PCM_CHANNELS}',
-            '--audio-buffer=0.2', '--audio-channels=mono',
+            '--audio-buffer=0.2', '--audio-channels=stereo',
             '--input-default-bindings=no', '--input-terminal=no',
             '--load-scripts=no', '--audio-client-name=iphone-mirror', '-']
 

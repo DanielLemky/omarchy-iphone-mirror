@@ -128,10 +128,12 @@ class DecoderTests(unittest.TestCase):
                 pcm.extend(decode_coredevice_frame(decoder, au))
         finally:
             decoder.close()
-        self.assertGreater(len(pcm), 480 * 2 * 4)
+        self.assertGreater(len(pcm), 480 * 4 * 4)
         samples = struct.unpack('<' + 'h' * (len(pcm) // 2), bytes(pcm))
+        self.assertEqual(len(samples) % 2, 0)
+        left = samples[0::2]
         # Skip overlap-add priming frames.
-        sig = samples[960:]
+        sig = left[960:]
         p1000 = goertzel_power(sig, 1000)
         p100 = goertzel_power(sig, 100)
         self.assertGreater(p1000, p100 * 100)

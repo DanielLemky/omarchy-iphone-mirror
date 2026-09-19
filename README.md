@@ -212,7 +212,7 @@ The prototype sometimes left the developer display service unresponsive after a 
 - Lower video latency is confirmed by user testing of the prototype, but it has not been measured end to end.
 - International keyboard layouts, IME, multitouch, and horizontal wheel scrolling are not complete.
 - An input-service failure disables input but leaves video running. A fresh click attempts reconnection without replaying the click or failed keys.
-- Audio is the phone's system output only (a mono mix). There is no microphone capture and no audio sent to the phone. Computer playback starts muted. Audio start or decode failure leaves video running. Lower the phone volume or use headphones if the phone speaker is too loud; the app does not mute the phone.
+- Audio is the phone's system output only (stereo AAC-ELD; some sessions mix to identical L/R). There is no microphone capture and no audio sent to the phone. Computer playback starts muted. Audio start or decode failure leaves video running. Lower the phone volume or use headphones if the phone speaker is too loud; the app does not mute the phone.
 - The pinned pymobiledevice3 RTP receiver is reused internally. The application does not start a VNC TCP server. It opens the media transport needed to receive the phone stream; this is not a claim that the application opens no network sockets.
 - The complete locked-phone USB unlock flow still needs controlled validation. Passcodes must remain user-entered and must never be logged.
 
