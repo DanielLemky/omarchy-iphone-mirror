@@ -38,7 +38,7 @@ The application owns video, input, and connection management. The plugin calls t
 ## Requirements
 
 - Omarchy/Linux with a working systemd user session and Hyprland.
-- Python 3.14 (tested baseline), MPV, usbmuxd, iproute2, and wl-clipboard.
+- Python 3.14 (tested baseline), MPV, usbmuxd, iproute2, wl-clipboard, libfdk-aac, and PipeWire (`pw-cat`).
 - A trusted iPhone with Developer Mode enabled.
 - A mounted developer image that provides the CoreDevice display and input services.
 - Tested phone: iPhone 13, iOS 27.0 build 24A437, developer image 27A5228h.
