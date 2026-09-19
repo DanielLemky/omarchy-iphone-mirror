@@ -1,4 +1,4 @@
-"""System-audio RTP receive, Opus decode, and local PCM playback.
+"""System-audio RTP receive, Opus decode, and local PipeWire playback.
 
 Apple's CoreDevice display service starts a second RTP stream of the
 phone's speaker mix. Xcode Device Mirroring pairs it with video using
@@ -19,6 +19,7 @@ import ctypes
 import ctypes.util
 import logging
 import queue
+import shutil
 import struct
 import subprocess
 import threading
@@ -28,7 +29,7 @@ from lifecycle import connect_service
 log = logging.getLogger('iphone-mirror.audio')
 
 PCM_RATE = 48000
-PCM_CHANNELS = 2
+PCM_CHANNELS = 1  # CoreDevice CELT is a mono mix; TOC s-bit is 0
 PCM_FRAME_SAMPLES = 480  # 10 ms at 48 kHz (two Opus CELT 5 ms frames)
 PCM_FRAME_BYTES = PCM_FRAME_SAMPLES * PCM_CHANNELS * 2
 RTCP_INTERVAL = 1.0
@@ -103,7 +104,7 @@ def prepare_opus_packet(payload: bytes) -> bytes:
 
 
 class OpusDecoder:
-    """Decode one CoreDevice Opus packet to packed s16le 48 kHz stereo PCM."""
+    """Decode one CoreDevice Opus packet to packed s16le 48 kHz mono PCM."""
 
     def __init__(self):
         name = ctypes.util.find_library('opus') or 'libopus.so.0'
@@ -125,18 +126,24 @@ class OpusDecoder:
         self._pcm = (ctypes.c_int16 * (OPUS_MAX_FRAME * PCM_CHANNELS))()
 
     def decode(self, payload: bytes) -> bytes:
-        packet = prepare_opus_packet(payload)
-        buf = (ctypes.c_ubyte * len(packet)).from_buffer_copy(packet)
-        count = self._lib.opus_decode(
-            self._decoder, buf, len(packet), self._pcm, OPUS_MAX_FRAME, 0,
-        )
-        if count < 0:
+        if len(payload) < 2:
+            return b''
+        # Never feed a known-invalid code-1 body to libopus: a failed
+        # decode can still poison decoder state and garble later packets.
+        candidates = []
+        if not ((payload[0] & 3) == 1 and ((len(payload) - 1) & 1)):
+            candidates.append(payload)
+        trimmed = prepare_opus_packet(payload)
+        if trimmed != payload:
+            candidates.append(trimmed)
+        for packet in candidates:
+            buf = (ctypes.c_ubyte * len(packet)).from_buffer_copy(packet)
             count = self._lib.opus_decode(
-                self._decoder, None, 0, self._pcm, PCM_FRAME_SAMPLES, 0,
+                self._decoder, buf, len(packet), self._pcm, OPUS_MAX_FRAME, 0,
             )
-            if count < 0:
-                return b''
-        return ctypes.string_at(self._pcm, count * PCM_CHANNELS * 2)
+            if count > 0:
+                return ctypes.string_at(self._pcm, count * PCM_CHANNELS * 2)
+        return b''
 
     def close(self):
         decoder = self._decoder
@@ -145,27 +152,44 @@ class OpusDecoder:
             self._lib.opus_decoder_destroy(decoder)
 
 
-class PcmPlayer:
-    """Feed live s16le PCM to a headless MPV. Drop packets on backlog."""
-
-    def __init__(self):
-        self._inq = queue.Queue(maxsize=24)
-        self._stop = threading.Event()
-        self._dropped = 0
-        self.player = subprocess.Popen([
-            'mpv', '--no-config', '--no-video', '--audio-display=no',
+def _pcm_player_command():
+    """Prefer PipeWire's clocked raw player; mpv stdin rawaudio underruns."""
+    pw_cat = shutil.which('pw-cat')
+    if pw_cat:
+        return [pw_cat, '--playback', '--raw', '--format', 's16',
+                '--rate', str(PCM_RATE), '--channels', str(PCM_CHANNELS),
+                '--latency', '80ms', '--media-role', 'Communication', '-']
+    paplay = shutil.which('paplay')
+    if paplay:
+        return [paplay, '--raw', f'--rate={PCM_RATE}',
+                f'--channels={PCM_CHANNELS}', '--format=s16le',
+                '--latency-msec=80']
+    mpv = shutil.which('mpv')
+    if not mpv:
+        raise RuntimeError('no PCM player')
+    return [mpv, '--no-config', '--no-video', '--audio-display=no',
             '--really-quiet', '--no-terminal', '--msg-level=all=warn',
-            '--cache=no', '--demuxer-readahead-secs=0',
-            '--demuxer=rawaudio',
+            '--cache=no', '--demuxer=rawaudio',
             '--demuxer-rawaudio-format=s16le',
             f'--demuxer-rawaudio-rate={PCM_RATE}',
             f'--demuxer-rawaudio-channels={PCM_CHANNELS}',
-            '--audio-buffer=0.05', '--gapless-audio=yes',
+            '--audio-buffer=0.2', '--audio-channels=mono',
             '--input-default-bindings=no', '--input-terminal=no',
-            '--input-vo-keyboard=no', '--load-scripts=no',
-            '--audio-client-name=iphone-mirror',
-            '-',
-        ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, bufsize=0)
+            '--load-scripts=no', '--audio-client-name=iphone-mirror', '-']
+
+
+class PcmPlayer:
+    """Feed live s16le PCM to PipeWire. Drop packets on backlog."""
+
+    def __init__(self):
+        self._inq = queue.Queue(maxsize=50)
+        self._stop = threading.Event()
+        self._dropped = 0
+        self.player = subprocess.Popen(
+            _pcm_player_command(),
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, bufsize=0,
+        )
         self._thread = threading.Thread(target=self._write, daemon=True)
         self._thread.start()
 

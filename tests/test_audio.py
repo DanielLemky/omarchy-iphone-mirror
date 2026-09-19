@@ -66,8 +66,16 @@ class DecoderTests(unittest.TestCase):
             self.skipTest(f'libopus unavailable ({type(error).__name__})')
         try:
             self.assertTrue(decoder._decoder)
+            self.assertEqual(decoder.decode(b''), b'')
+            self.assertEqual(decoder.decode(b'\x00'), b'')
         finally:
             decoder.close()
+
+    def test_pcm_player_prefers_pipewire(self):
+        from audio import _pcm_player_command
+        command = _pcm_player_command()
+        self.assertTrue(command)
+        self.assertIn(command[0].rsplit('/', 1)[-1], {'pw-cat', 'paplay', 'mpv'})
 
 
 class SessionTests(unittest.IsolatedAsyncioTestCase):
