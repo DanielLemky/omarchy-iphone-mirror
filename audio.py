@@ -290,8 +290,12 @@ class PcmPlayer:
         self._thread.start()
 
     def play(self, pcm: bytes):
-        if not pcm or self._stop.is_set() or self.muted:
+        if not pcm or self._stop.is_set():
             return
+        # Keep PipeWire clocked while muted. Stopping writes causes xruns
+        # that keep clicking after unmute.
+        if self.muted:
+            pcm = bytes(len(pcm))
         try:
             self._inq.put_nowait(pcm)
         except queue.Full:

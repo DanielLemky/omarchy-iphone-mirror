@@ -94,7 +94,7 @@ class DecoderTests(unittest.TestCase):
         self.assertTrue(command)
         self.assertIn(command[0].rsplit('/', 1)[-1], {'pw-cat', 'paplay', 'mpv'})
 
-    def test_muted_player_drops_pcm(self):
+    def test_muted_player_writes_silence(self):
         from audio import PcmPlayer
         with patch('audio.subprocess.Popen') as popen:
             proc = Mock()
@@ -105,10 +105,10 @@ class DecoderTests(unittest.TestCase):
             try:
                 self.assertTrue(player.muted)
                 player.play(b'\x00\x01' * 10)
-                self.assertTrue(player._inq.empty())
+                self.assertEqual(player._inq.get_nowait(), b'\x00' * 20)
                 player.muted = False
                 player.play(b'\x00\x01' * 10)
-                self.assertEqual(player._inq.qsize(), 1)
+                self.assertEqual(player._inq.get_nowait(), b'\x00\x01' * 10)
             finally:
                 player.close()
 
