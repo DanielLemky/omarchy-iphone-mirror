@@ -59,7 +59,7 @@ if ((${#missing_commands[@]})); then
   done
   printf 'iphone-mirror: install the missing packages, then run this installer again:\n  omarchy pkg add' >&2
   printf ' %q' "${packages[@]}" >&2
-  printf '\n' >&2
+  printf '\nAfter installing usbmuxd, unplug, unlock and reconnect the iPhone so its USB permissions apply.\n' >&2
   exit 1
 fi
 
@@ -131,15 +131,15 @@ printf '\nApplication installed.\nLocation: %s\n' "${XDG_DATA_HOME:-"$HOME/.loca
 printf '%s\n' 'Automatic startup is disabled. The viewer has not been started.'
 if ((skip_phone_setup)); then
   section 'Setup'
-  printf '%s\n' 'Phone setup skipped by request. Run ./setup-phone.sh when needed.'
+  printf '%s\n' 'Phone setup skipped by request. Run iphone-mirror setup when needed.'
 elif [[ -t 0 && -t 1 ]]; then
   app_dir=${XDG_DATA_HOME:-"$HOME/.local/share"}/iphone-mirror
   if ! "$app_dir/venv/bin/python" "$app_dir/setup-phone.py"; then
-    printf '\n%s\n' 'The application remains installed. Run ./setup-phone.sh to resume phone setup.' >&2
+    printf '\n%s\n' 'The application remains installed. Run iphone-mirror setup to resume phone setup.' >&2
   fi
 else
   section 'Setup'
-  printf '%s\n' 'Phone setup needs an interactive terminal. Run ./setup-phone.sh to continue.'
+  printf '%s\n' 'Phone setup needs an interactive terminal. Run iphone-mirror setup to continue.'
 fi
 printf '\n%s\n' 'Launch: open iPhone Mirror from the application launcher.'
 printf '%s\n' 'Connection: USB when connected; otherwise Wi-Fi.'

@@ -166,3 +166,10 @@ class CliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SetupCommandTests(unittest.TestCase):
+    def test_setup_dispatches_to_installed_guide_and_preserves_exit_code(self):
+        with mock.patch('cli.subprocess.call', return_value=1) as run:
+            self.assertEqual(cli.main(['setup']), 1)
+        self.assertTrue(run.call_args.args[0][1].endswith('/setup-phone.py'))

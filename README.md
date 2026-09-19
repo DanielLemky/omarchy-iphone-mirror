@@ -16,6 +16,68 @@ This installs the **early alpha version specified above**, not development HEAD 
 
 Read the [requirements](#requirements) and [installation details](#installation-details), including how to inspect the script before running it. Close any running mirror before installation.
 
+### Install, prepare, then verify
+
+Installation copies the application; it does not prove that a phone can mirror.
+After installing the `usbmuxd` package, **unplug, unlock and reconnect the iPhone**
+so the new device permissions apply. Setup distinguishes USB enumeration (a data
+connection), daemon availability, USB trust, Developer Mode and display support.
+
+Resume at any time from a terminal with:
+
+```sh
+iphone-mirror setup
+```
+
+This checks current state and skips completed steps. It does not repeat pairing,
+reveal Developer Mode again, or replace an already mounted image. Each necessary
+phone change still asks for approval. Keep the phone unlocked and awake while
+preparing the image. After an iOS update or restart, run the same command: an image
+may need mounting again even though trust and Developer Mode are retained.
+
+Setup checks display capabilities before offering a viewer test. **Zero supported
+media features means this combination cannot currently stream through this app.**
+Reinstalling and resetting pairing do not fix that result. A nonzero value permits
+trying the viewer; it does not verify video playback or input. See the tested
+configurations below before considering an iOS upgrade; no upgrade guarantees support.
+
+Wi-Fi pairing only saves credentials. The guide separately offers a USB-disconnected
+Wi-Fi discovery, authentication and capability test. Video and input still need
+manual verification. For the first playback test, use USB and keep the phone unlocked.
+
+### If the viewer does not open
+
+The viewer sends a desktop notification on startup failure when `notify-send` is
+available. The error also remains available through:
+
+```sh
+iphone-mirror status
+iphone-mirror setup
+```
+
+Close any running viewer before setup. The guide gives specific recovery instructions
+for no USB device, multiple phones, missing daemon access, a locked phone and
+unsupported display capabilities. Optional notifications use `notify-send` from
+`libnotify`; installation does not require it.
+
+### Switching to Wi-Fi
+
+1. Close the viewer with **Super + W**.
+2. Disconnect USB and keep the phone unlocked on the same local network as the computer.
+3. Reopen iPhone Mirror.
+
+Each launch prefers USB when available. **Connecting or unplugging a cable does not
+switch an active session.** If USB is plugged in but not detected, unlock the phone
+and reseat both cable ends, using the previously working port.
+
+If Wi-Fi discovery fails, check guest-network/client isolation and temporarily
+disconnect the phone's VPN to compare. When using a Tailscale exit node, check
+[Allow Local Network Access](https://tailscale.com/docs/features/exit-nodes).
+Tailscale being installed alone does not establish that it caused the failure.
+The app uses local-network discovery and rejects Tailscale/tunnel routes; a Tailscale
+address does not substitute for LAN discovery. No firewall or VPN settings are
+changed automatically. USB remains usable when wireless setup fails.
+
 ### Install with an agent
 
 Copy this prompt into your coding agent:
@@ -55,6 +117,13 @@ These are results from specific phones and software combinations, not a complete
 | Intel/x86-64 Omarchy | Known-working iPhone 13, iOS 27.0, developer image 27A5228h | The user confirmed USB was working. Wi-Fi opened but stopped with `player-backlog`; the failure repeated. Individual input checks have not been recorded separately. Intel support remains unverified. |
 | Intel/x86-64 Omarchy | Second test phone, iOS 17.1.1 | The current USB tunnel requires iOS 17.4 or later. Wi-Fi connected and the display service was present, but it reported zero supported media features; video startup failed. |
 | Intel/x86-64 Omarchy | Same second phone after updating to iOS 18.7.10, developer image 27A5228h | The image mounted and the USB tunnel connected. The display service still reported zero supported media features; usable mirroring was not established. |
+
+An additional user session observed **zero supported media features on iOS 26.6.2**,
+then **972 on iOS 27.0**, followed by successful USB mirroring as reported
+by the user (individual input checks were not recorded). The phone model and exact
+developer-image build were not recorded, so this is not a new verified matrix entry
+or evidence that all iOS 26 devices fail. Wi-Fi discovery remained unresolved;
+Tailscale interference was suspected but not established.
 
 The second phone's model has not been recorded. These results do not prove that all iOS 17 or 18 devices fail, that iOS 27 is required, or that Intel is the cause. The known-working iOS 27 phone also worked over USB on Intel. A mounted image and an advertised display service do not by themselves establish mirroring support.
 

@@ -52,7 +52,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                                       'streamConfig':{}}}
             async def stop(sid): events.append('device-stop')
             async def close(): events.append('display-close')
-            service=Mock(connect=AsyncMock(), start_video_stream=AsyncMock(side_effect=start),
+            service=Mock(get_media_support_info=AsyncMock(return_value={'supportedFeatures':972}), connect=AsyncMock(), start_video_stream=AsyncMock(side_effect=start),
                          stop_media_stream=AsyncMock(side_effect=stop), close=AsyncMock(side_effect=close))
             class Bridge:
                 error = None

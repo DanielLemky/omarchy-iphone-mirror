@@ -222,7 +222,7 @@ def restart(connection=None, serial=None) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="iphone-mirror")
-    parser.add_argument("command", choices=("start", "stop", "restart", "status", "reload-ui"))
+    parser.add_argument("command", choices=("start", "stop", "restart", "status", "reload-ui", "setup"))
     parser.add_argument('--connection',choices=('usb','wifi','auto'))
     parser.add_argument('--serial',help='Select a paired iPhone')
     return parser
@@ -234,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
     if (args.connection is not None or args.serial is not None) and args.command not in ('start','restart'):
         parser.error('Connection options require start or restart')
     try:
+        if args.command == "setup":
+            return subprocess.call([sys.executable, str(Path(__file__).with_name('setup-phone.py'))])
         if args.command == "start":
             if args.connection is None and args.serial is None:
                 start()
@@ -256,6 +258,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
     except CliError as exc:
         print(f"iphone-mirror: {exc}", file=sys.stderr)
+        if args.command in ('start', 'restart'):
+            from diagnostics import notify_failure
+            notify_failure('The viewer could not be launched. Run iphone-mirror status and check systemctl --user status iphone-mirror.service.')
         return 1
     return 0
 

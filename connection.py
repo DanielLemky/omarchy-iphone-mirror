@@ -1,4 +1,5 @@
 """Explicit USB or authenticated network transport. Never creates pairing records."""
+from diagnostics import DiagnosticError
 import asyncio
 import ipaddress
 import json
@@ -70,7 +71,7 @@ async def wifi_provider(serial, autopair=False, remotepairing_fallback=False):
     if serial:
         identifiers = [i for i in identifiers if i.replace('-','')==serial.replace('-','')]
     if not identifiers:
-        raise RuntimeError('No saved CoreDevice pairing matches this device. Pair over USB first.')
+        raise DiagnosticError('wifi_pairing_missing', 'No saved Wi-Fi pairing matches this phone. Connect USB and run iphone-mirror setup.')
     if len(identifiers)>1:
         raise RuntimeError('Several pairing records exist. Select an iPhone with --serial.')
     identifier = identifiers[0]
@@ -86,7 +87,7 @@ async def wifi_provider(serial, autopair=False, remotepairing_fallback=False):
             return provider,None
         except (OSError,TimeoutError,asyncio.IncompleteReadError):
             continue
-    raise RuntimeError('The paired iPhone was not reachable on the local network.')
+    raise DiagnosticError('wifi_unreachable', 'The paired iPhone was not reachable over local Wi-Fi. Keep it unlocked on the same network; check guest-network isolation and temporarily disconnect its VPN. For a Tailscale exit node, check Allow Local Network Access. Run iphone-mirror setup for a separate Wi-Fi test.')
 
 class WifiTunnel(ut.UserspaceRsdTunnel):
     async def _aopen_locked(self):

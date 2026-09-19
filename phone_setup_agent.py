@@ -9,12 +9,11 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from diagnostics import DiagnosticError, error_message, usb_diagnostic, validate_features
 
 
-class SetupError(Exception):
-    def __init__(self, code, message):
-        self.code = code
-        self.message = message
+class SetupError(DiagnosticError):
+    pass
 
 
 CHANGES = {
@@ -23,7 +22,7 @@ CHANGES = {
     'prepare-image': ('Prepare the developer image', 'May download and mount an Apple developer image. Does not replace an already mounted image.'),
     'pair-wifi': ('Enable Wi-Fi access', 'Saves a separate network pairing record on this computer using the trusted USB connection.'),
 }
-ACTIONS = ('plan', 'check', *CHANGES, 'check-display')
+ACTIONS = ('plan', 'check', *CHANGES, 'check-display', 'check-wifi')
 
 
 def result(action, ok, code, message, data=None):
@@ -62,9 +61,16 @@ def setup_guard():
 
 async def select_usb():
     from pymobiledevice3.usbmux import list_devices
-    phones = [device for device in await list_devices() if device.is_usb]
+    try:
+        phones = [device for device in await list_devices() if device.is_usb]
+    except OSError:
+        raise usb_diagnostic() from None
+    except Exception as error:
+        if type(error).__name__ == 'ConnectionFailedToUsbmuxdError':
+            raise usb_diagnostic() from None
+        raise
     if not phones:
-        raise SetupError('usb_phone_missing', 'Connect and unlock one iPhone with a USB data cable.')
+        raise usb_diagnostic()
     if len(phones) != 1:
         raise SetupError('multiple_usb_phones', 'Disconnect other iPhones before setup.')
     return phones[0].serial
@@ -110,8 +116,10 @@ async def inspect_phone(serial):
         developer_mode = await client.get_developer_mode_status()
         if type(developer_mode) is not bool:
             raise SetupError('unknown_developer_mode', 'Developer Mode status could not be validated.')
-        async with MobileImageMounterService(client) as service:
-            images = await service.copy_devices()
+        images = []
+        if developer_mode:
+            async with MobileImageMounterService(client) as service:
+                images = await service.copy_devices()
         from pymobiledevice3.pair_records import iter_remote_paired_identifiers
         records = list(iter_remote_paired_identifiers())
         normalize = lambda value: value.replace('-', '').lower()
@@ -133,17 +141,30 @@ async def display_capabilities(serial):
             raise SetupError('display_service_missing', 'The mounted image does not expose the display service.')
         async with DisplayService(rsd) as service:
             response = await service.get_media_support_info()
-        flags = response.get('supportedFeatures')
-        # RemoteXPC decodes integer fields as int subclasses. Reject bool explicitly.
-        if not isinstance(flags, int) or isinstance(flags, bool) or flags < 0:
-            raise SetupError('unknown_display_features', 'The display capability response could not be validated.')
-        if flags == 0:
-            raise SetupError('display_features_unavailable', 'The display service reports zero supported media features. Stop compatibility testing here.')
-        return {'supported_media_features': int(flags), 'mirroring_verified': False}
+        flags = validate_features(response)
+        return {'supported_media_features': flags, 'mirroring_verified': False}
 
 
-async def execute(action):
+async def execute(action, expected_serial=None):
+    if action == 'check-wifi':
+        from pymobiledevice3.usbmux import list_devices
+        try:
+            devices = await list_devices()
+        except Exception as error:
+            if type(error).__name__ != 'ConnectionFailedToUsbmuxdError':
+                raise
+            devices = []
+        if any(d.is_usb for d in devices):
+            raise SetupError('disconnect_usb', 'Disconnect USB before testing Wi-Fi; keep the phone unlocked on the same local network.')
+        from connection import get_tunnel
+        from pymobiledevice3.remote.core_device.display_service import DisplayService
+        async with get_tunnel('wifi', expected_serial) as rsd:
+            async with DisplayService(rsd) as service:
+                flags = validate_features(await service.get_media_support_info())
+        return result(action, True, 'wifi_checked', 'Wi-Fi authentication and display capability checks passed. Video and input still need a viewer test.', {'supported_media_features': flags, 'mirroring_verified': False})
     serial = await asyncio.wait_for(select_usb(), 10)
+    if expected_serial is not None and serial != expected_serial:
+        raise SetupError('phone_changed', 'The connected phone changed. Run iphone-mirror setup again before making changes.')
     if action == 'pair-usb':
         await asyncio.wait_for(change_phone(action, serial), 45)
         return result(action, True, 'command_completed', 'USB pairing command completed. Mirroring is not yet verified.')
@@ -178,7 +199,7 @@ async def execute(action):
 
 class JsonParser(argparse.ArgumentParser):
     def error(self, message):
-        raise SetupError('invalid_arguments', 'Use plan, check, pair-usb, reveal-developer-mode, prepare-image, pair-wifi, or check-display. Changes require --approve.')
+        raise SetupError('invalid_arguments', 'Use plan, check, pair-usb, reveal-developer-mode, prepare-image, pair-wifi, check-display, or check-wifi. Changes require --approve.')
 
 
 def main(argv):
@@ -187,6 +208,7 @@ def main(argv):
         parser = JsonParser(prog='setup-phone.sh', add_help=False)
         parser.add_argument('action', choices=ACTIONS)
         parser.add_argument('--approve', action='store_true')
+        parser.add_argument('--serial', help=argparse.SUPPRESS)
         options = parser.parse_args(argv)
         action = options.action
         if action in CHANGES and not options.approve:
@@ -213,12 +235,12 @@ def main(argv):
                 logging.disable(logging.CRITICAL)
                 with open(os.devnull, 'w') as sink, redirect_stdout(sink), redirect_stderr(sink):
                     with setup_guard():
-                        answer = asyncio.run(execute(action))
+                        answer = asyncio.run(asyncio.wait_for(execute(action, options.serial) if options.serial else execute(action), 30 if action == 'check-wifi' else 320))
             finally:
                 logging.disable(previous)
         print(json.dumps(answer))
         return 0
-    except SetupError as error:
+    except DiagnosticError as error:
         answer = result(action, False, error.code, error.message)
         status = 2 if error.code == 'invalid_arguments' else 1
     except (TimeoutError, subprocess.TimeoutExpired):
@@ -235,7 +257,7 @@ def main(argv):
             'PasswordRequiredError': ('phone_unlock_required', 'Unlock the phone with its passcode on the phone, then run check.'),
             'UserDeniedPairingError': ('trust_declined', 'Trust was declined on the phone. Do not repeat pairing without approval.'),
         }
-        code, message = known.get(type(error).__name__, ('setup_failed', 'Setup could not complete. Check the desktop session, USB trust, and phone unlock state. No automatic retry will run.'))
+        code, message = known.get(type(error).__name__, ('setup_failed', error_message(error)))
         answer = result(action, False, code, message)
         status = 1
     print(json.dumps(answer))

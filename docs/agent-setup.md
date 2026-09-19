@@ -80,3 +80,14 @@ Exit codes: `0` completed, `1` failed or blocked, `2` invalid arguments, `3` app
 > After successful capability checks, ask before opening the viewer. Test USB first. Ask me to confirm live video and input. For Wi-Fi, confirm the separate pairing step, close the viewer, ask me to disconnect USB, and start a new session. Multiple saved Wi-Fi records need explicit device selection; do not delete them to make selection easier.
 >
 > Do not capture or log the screen, keystrokes, pointer positions, clipboard contents, passcodes, or pairing records. Do not change the Bluetooth controller. Finish with the installed version, completed steps, user-confirmed test results, remaining limits, and the paths for repeating setup and uninstalling. Tell me that installation added iPhone Mirror to the Omarchy application launcher: open the launcher, search for iPhone Mirror, and select it. Explain that each launch uses USB if connected, otherwise Wi-Fi; Super + W closes it; and it does not start automatically at login or cable connection.
+
+## Resuming and wireless verification
+
+The installed interactive entrypoint is `iphone-mirror setup`. It inspects current
+state and requests approval only for needed changes. After an iOS update, inspect
+again: the developer image may be absent while trust and Developer Mode remain.
+
+`bash ./setup-phone.sh check-wifi` is a read-only discovery, authentication and display
+capability check. Disconnect USB first and keep the phone unlocked on the same LAN.
+It uses saved credentials only and never starts video or sends input. A passed check
+is not proof of playback. Wi-Fi failure does not invalidate successful USB tests.
