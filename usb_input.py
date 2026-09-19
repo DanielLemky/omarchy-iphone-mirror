@@ -10,6 +10,7 @@ import logging
 import traceback
 import time
 import os
+import shutil
 from pathlib import Path
 from pymobiledevice3.remote.core_device.hid_service import (
     UniversalHIDServiceService, TOUCHSCREEN_STATE_CONTACT, TOUCHSCREEN_STATE_RELEASE,
@@ -17,13 +18,16 @@ from pymobiledevice3.remote.core_device.hid_service import (
 )
 from pymobiledevice3.remote.core_device.vnc_server import ASCII_TO_HID
 from pymobiledevice3.remote.core_device.pasteboard_service import PasteboardService
+from orientation import (
+    TOOLBAR_RATIO, displayed_landscape, hid_from_displayed, swapped_geometry,
+    toolbar_ratio_for, visual_rotate,
+)
 
 SPECIAL = {'SPACE': 44, 'ENTER': 40, 'KP_ENTER': 40, 'BS': 42,
            'BACKSPACE': 42, 'DEL': 76, 'INS': 73, 'TAB': 43, 'ESC': 41,
            'LEFT': 80, 'RIGHT': 79, 'UP': 82, 'DOWN': 81,
            'HOME': 74, 'END': 77, 'PGUP': 75, 'PGDWN': 78}
 MODS = {'Ctrl': 224, 'Shift': 225, 'Alt': 226, 'Meta': 227}
-TOOLBAR_RATIO = 0.08
 
 def input_bindings():
     keys = ('UNMAPPED', 'ANY_UNICODE', 'MBTN_LEFT', 'WHEEL_UP', 'WHEEL_DOWN')
@@ -65,11 +69,20 @@ def load_ui():
         pass
     return defaults
 
-def toolbar_action(mouse, dimensions):
+def toolbar_top(dimensions, ratio=TOOLBAR_RATIO):
+    w, h = dimensions.get('w', 0), dimensions.get('h', 0)
+    mb = dimensions.get('mb', 0)
+    if h > 0 and mb > 0:
+        return h - mb
+    return h * (1 - ratio)
+
+
+def toolbar_action(mouse, dimensions, ratio=TOOLBAR_RATIO):
     w, h = dimensions.get('w', 0), dimensions.get('h', 0)
     x, y = mouse.get('x', -1), mouse.get('y', -1)
+    top = toolbar_top(dimensions, ratio)
     if (mouse.get('hover') and w > 0 and h > 0
-            and 0 <= x < w and h*(1-TOOLBAR_RATIO) <= y < h):
+            and 0 <= x < w and top <= y < h):
         return 'home' if x < w/2 else 'search'
     return None
 
@@ -87,7 +100,7 @@ def key_usages(name, text=''):
     usage, shift = mapping
     return mods | {usage} | ({225} if shift else set())
 
-def touch_position(mouse, dimensions, clamp=False):
+def touch_position(mouse, dimensions, clamp=False, rotate=0):
     if not mouse or not dimensions:
         return None
     w, h = dimensions.get('w', 0), dimensions.get('h', 0)
@@ -99,12 +112,13 @@ def touch_position(mouse, dimensions, clamp=False):
     x, y = mouse.get('x', -1)-left, mouse.get('y', -1)-top
     if not clamp and (not mouse.get('hover', False) or not (0 <= x < width and 0 <= y < height)):
         return None
-    return (round(max(0, min(1, x/(width-1)))*65535),
-            round(max(0, min(1, y/(height-1)))*65535))
+    nx, ny = hid_from_displayed(x/(width-1), y/(height-1), rotate)
+    return (round(nx*65535), round(ny*65535))
 
 class InputBridge:
-    def __init__(self, rsd, socket_path):
+    def __init__(self, rsd, socket_path, player_pid=None):
         self.rsd, self.socket_path = rsd, socket_path
+        self.player_pid = player_pid
         self.writer = None
         self.ready = asyncio.Event()
         self.hid = None
@@ -123,14 +137,23 @@ class InputBridge:
         self.scrolling = False
         self.scroll_pending = 0.0
         self.paste_cancel_until = 0.0
+        self.device_orientation = 1
+        self.buffer_w = 0
+        self.buffer_h = 0
+        self.visual_rotate = 0
+        self.toolbar_ratio = TOOLBAR_RATIO
+        self._requested_geometry = None
+        self.orientation_task = None
+        self.springboard = None
+        self._orientation_warned = False
 
     async def scroll_wheel(self):
         try:
             await self.ensure_hid()
             while abs(self.scroll_pending) > .001 and self.focused:
                 amount, self.scroll_pending = self.scroll_pending, 0.0
-                pos = touch_position(self.mouse, self.dimensions)
-                if pos is None or toolbar_action(self.mouse, self.dimensions):
+                pos = touch_position(self.mouse, self.dimensions, rotate=self.visual_rotate)
+                if pos is None or toolbar_action(self.mouse, self.dimensions, self.toolbar_ratio):
                     break
                 # Stay away from system-gesture edges. Down-wheel = finger up.
                 x = max(3277, min(62258, pos[0]))
@@ -158,7 +181,7 @@ class InputBridge:
         w, h = self.dimensions.get('w', 0), self.dimensions.get('h', 0)
         if w <= 0 or h <= 0:
             return
-        top = round(h*(1-TOOLBAR_RATIO))
+        top = round(toolbar_top(self.dimensions, self.toolbar_ratio))
         center = (top+h)/2
         # ASS vector background and Home icon in the reserved margin.
         background = (r'{\an7\pos(0,0)\bord0\shad0\1c&H252525&\p1}'
@@ -308,7 +331,78 @@ class InputBridge:
                     await asyncio.wait_for(self.hid.send_keyboard(self.keyboard, []), 1)
                     self.reported_keys.clear()
 
+    async def apply_view(self):
+        rotate = visual_rotate(self.device_orientation, self.buffer_w, self.buffer_h)
+        landscape = displayed_landscape(self.buffer_w, self.buffer_h, rotate)
+        w, h = self.dimensions.get('w', 0), self.dimensions.get('h', 0)
+        target_h = min(w, h) if landscape and w > 0 and h > 0 else (max(w, h) if w > 0 and h > 0 else h)
+        ratio = toolbar_ratio_for(target_h)
+        if rotate != self.visual_rotate:
+            self.visual_rotate = rotate
+            await self.command('set_property', 'video-rotate', rotate)
+        if abs(ratio - self.toolbar_ratio) > .001:
+            self.toolbar_ratio = ratio
+            await self.command('set_property', 'video-margin-ratio-bottom', ratio)
+        geom = swapped_geometry(w, h, landscape)
+        if geom is not None and geom != self._requested_geometry:
+            self._requested_geometry = geom
+            await self.resize_window(*geom)
+        elif geom is None:
+            self._requested_geometry = None
+
+    async def resize_window(self, width, height):
+        await self.command('set_property', 'geometry', f'{int(width)}x{int(height)}')
+        pid = self.player_pid
+        if not pid or not shutil.which('hyprctl'):
+            return
+        proc = await asyncio.create_subprocess_exec(
+            'hyprctl', 'dispatch', 'resizewindowpixel', 'exact',
+            str(int(width)), f'{int(height)},pid:{int(pid)}',
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(proc.wait(), 2)
+
+    async def orientation_loop(self):
+        from pymobiledevice3.services.springboard import SpringBoardServicesService
+        delay = .4
+        try:
+            while True:
+                try:
+                    if self.springboard is None:
+                        self.springboard = SpringBoardServicesService(self.rsd)
+                    orientation = await self.springboard.get_interface_orientation()
+                    delay = .4
+                    self._orientation_warned = False
+                    if orientation != self.device_orientation:
+                        self.device_orientation = orientation
+                        await self.apply_view()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    service, self.springboard = self.springboard, None
+                    if service is not None:
+                        with contextlib.suppress(Exception):
+                            await asyncio.wait_for(service.close(), 1)
+                    delay = min(5.0, delay * 2)
+                    if not self._orientation_warned:
+                        self._orientation_warned = True
+                        logging.getLogger('iphone-mirror.input').warning(
+                            'Orientation poll failed (%s)', type(error).__name__)
+                await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            service, self.springboard = self.springboard, None
+            if service is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(service.close(), 1)
+
     async def close(self):
+        if self.orientation_task is not None:
+            task, self.orientation_task = self.orientation_task, None
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         await self.release()
         if self.hid is not None:
             with contextlib.suppress(Exception):
@@ -351,8 +445,8 @@ class InputBridge:
         if name in ('WHEEL_UP', 'WHEEL_DOWN'):
             if action not in ('d', 'p', 'r'):
                 return
-            if (touch_position(self.mouse, self.dimensions) is None
-                    or toolbar_action(self.mouse, self.dimensions)
+            if (touch_position(self.mouse, self.dimensions, rotate=self.visual_rotate) is None
+                    or toolbar_action(self.mouse, self.dimensions, self.toolbar_ratio)
                     or (self.gesture_task is not None and not self.scrolling)
                     or (self.contact is not None and not self.scrolling)):
                 return
@@ -372,13 +466,13 @@ class InputBridge:
             if self.gesture_task is not None:
                 return
             if action in ('d', 'p'):
-                button = toolbar_action(self.mouse, self.dimensions)
+                button = toolbar_action(self.mouse, self.dimensions, self.toolbar_ratio)
                 if button is not None:
                     await self.release()
                     task = self.home_button() if button == 'home' else self.search_button()
                     self.gesture_task = asyncio.create_task(task)
                     return
-                pos = touch_position(self.mouse, self.dimensions)
+                pos = touch_position(self.mouse, self.dimensions, rotate=self.visual_rotate)
                 if pos is not None:
                     await self.ensure_hid()
                     self.contact = pos
@@ -438,8 +532,8 @@ class InputBridge:
             if not self.enabled:
                 # A fresh click explicitly reconnects input, but is not replayed.
                 if (self.focused and name == 'MBTN_LEFT' and state[:1] in ('d','p')
-                        and touch_position(self.mouse, self.dimensions) is not None
-                        and toolbar_action(self.mouse, self.dimensions) is None):
+                        and touch_position(self.mouse, self.dimensions, rotate=self.visual_rotate) is not None
+                        and toolbar_action(self.mouse, self.dimensions, self.toolbar_ratio) is None):
                     await self.ensure_hid()
                     self.enabled = True
                     self.error = None
@@ -458,11 +552,12 @@ class InputBridge:
                 await asyncio.sleep(.1)
         else:
             raise RuntimeError('Viewer input socket did not become available')
-        for i, name in enumerate(('focused', 'mouse-pos', 'osd-dimensions')):
+        for i, name in enumerate(('focused', 'mouse-pos', 'osd-dimensions', 'video-params')):
             await self.command('observe_property', i, name)
         # Preserve window-manager close requests instead of forwarding them.
         await self.command('define-section', 'usb-input', input_bindings(), 'force')
         await self.command('enable-section', 'usb-input', 'exclusive')
+        self.orientation_task = asyncio.create_task(self.orientation_loop())
         self.ready.set()
         try:
             while line := await reader.readline():
@@ -475,7 +570,18 @@ class InputBridge:
                             await self.release()
                     elif name == 'osd-dimensions':
                         self.dimensions = value or {}
+                        await self.apply_view()
                         await self.draw_toolbar()
+                    elif name == 'video-params':
+                        params = value or {}
+                        width, height = params.get('w', 0), params.get('h', 0)
+                        try:
+                            width, height = int(width or 0), int(height or 0)
+                        except (TypeError, ValueError):
+                            width, height = 0, 0
+                        if (width, height) != (self.buffer_w, self.buffer_h):
+                            self.buffer_w, self.buffer_h = width, height
+                            await self.apply_view()
                     elif name == 'mouse-pos':
                         self.mouse = value or {}
                         if self.scrolling and not self.mouse.get('hover'):
@@ -484,7 +590,8 @@ class InputBridge:
                             if not self.mouse.get('hover'):
                                 await self.release()
                             elif self.focused and self.enabled:
-                                pos = touch_position(self.mouse, self.dimensions, clamp=True)
+                                pos = touch_position(self.mouse, self.dimensions, clamp=True,
+                                                     rotate=self.visual_rotate)
                                 if pos is not None and pos != self.contact:
                                     self.contact = pos
                                     try:

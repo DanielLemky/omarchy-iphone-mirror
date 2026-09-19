@@ -56,7 +56,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                          stop_media_stream=AsyncMock(side_effect=stop), close=AsyncMock(side_effect=close))
             class Bridge:
                 error = None
-                def __init__(self,*args):
+                def __init__(self,*args,**kwargs):
                     self.ready=asyncio.Event()
                 async def run(self):
                     self.ready.set()
