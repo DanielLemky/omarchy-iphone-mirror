@@ -74,6 +74,17 @@ class PhoneSetupTests(unittest.TestCase):
             '6/7 Setup: Prepare the developer image',
             '7/7 Setup: Enable Wi-Fi access (optional)'])
 
+    def test_completion_explains_installed_launcher(self):
+        with patch.object(setup,'confirm',return_value=True), \
+             patch.object(setup,'run_tool',side_effect=[json.dumps(['test-device']),'','','','']), \
+             patch('builtins.print') as output:
+            setup.prepare()
+        text='\n'.join(str(call.args[0]) for call in output.call_args_list if call.args)
+        self.assertIn('Installation added iPhone Mirror to the Omarchy application launcher.',text)
+        self.assertIn('search for iPhone Mirror',text)
+        self.assertIn('Close the viewer with Super + W.',text)
+        self.assertIn('or when a USB cable is connected.',text)
+
     def test_multiple_devices_block_changes(self):
         with patch.object(setup,'confirm',return_value=True), \
              patch.object(setup,'run_tool',return_value=json.dumps(['one','two'])) as run,patch('builtins.print'):

@@ -71,7 +71,11 @@ Discovery output can contain device identifiers and network addresses. Network i
 
 ## 5. Start the viewer
 
-Use the application launcher, or run:
+Installation adds **iPhone Mirror** to the Omarchy application launcher. After phone setup, open the launcher, search for **iPhone Mirror**, and select it.
+
+Each launch uses USB if connected, otherwise Wi-Fi. Close the viewer with **Super + W**. It does not start automatically at login or when a cable is connected.
+
+You can also start it from a terminal:
 
 ```sh
 iphone-mirror start  # USB if connected, otherwise Wi-Fi
