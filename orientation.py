@@ -9,18 +9,18 @@ MIN_TOOLBAR_PX = 56
 MAX_TOOLBAR_RATIO = 0.22
 PORTRAIT_GEOMETRY = '400x870'
 
-# SpringBoard getInterfaceOrientation returns UIInterfaceOrientation:
-# 1 portrait, 2 upside down, 3 landscape-right (home on left), 4 landscape-left
-# (home on right). CoreDevice names describe the physical tilt.
+# SpringBoard getInterfaceOrientation integers, with MPV clockwise degrees.
+# A real-phone landscape session reported orientation 3 with video-rotate 90
+# and the picture was inverted; 3 therefore needs 270, not 90.
 ROTATE_BY_ORIENTATION = {
     1: 0,
     2: 180,
-    3: 90,
-    4: 270,
+    3: 270,
+    4: 90,
     'portrait': 0,
     'portraitUpsideDown': 180,
-    'landscapeRight': 90,
     'landscapeLeft': 270,
+    'landscapeRight': 90,
 }
 
 

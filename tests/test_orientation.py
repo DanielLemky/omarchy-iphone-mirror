@@ -11,19 +11,19 @@ class OrientationMathTests(unittest.TestCase):
     def test_rotate_for_orientation(self):
         self.assertEqual(rotate_for_orientation(1), 0)
         self.assertEqual(rotate_for_orientation(2), 180)
-        self.assertEqual(rotate_for_orientation(3), 90)
-        self.assertEqual(rotate_for_orientation(4), 270)
+        self.assertEqual(rotate_for_orientation(3), 270)
+        self.assertEqual(rotate_for_orientation(4), 90)
         self.assertEqual(rotate_for_orientation('landscapeLeft'), 270)
         self.assertEqual(rotate_for_orientation('landscapeRight'), 90)
         self.assertEqual(rotate_for_orientation(None), 0)
         self.assertEqual(rotate_for_orientation('unknown'), 0)
 
     def test_visual_rotate_drops_when_buffer_matches(self):
-        self.assertEqual(visual_rotate(3, 720, 1560), 90)
+        self.assertEqual(visual_rotate(3, 720, 1560), 270)
         self.assertEqual(visual_rotate(3, 1560, 720), 0)
         self.assertEqual(visual_rotate(1, 720, 1560), 0)
         self.assertEqual(visual_rotate(1, 1560, 720), 0)
-        self.assertEqual(visual_rotate(4, 0, 0), 270)
+        self.assertEqual(visual_rotate(4, 0, 0), 90)
 
     def test_displayed_landscape(self):
         self.assertTrue(displayed_landscape(720, 1560, 90))
@@ -88,9 +88,9 @@ class ApplyViewTests(unittest.IsolatedAsyncioTestCase):
         self.b.device_orientation = 3
         with patch('usb_input.shutil.which', return_value=None):
             await self.b.apply_view()
-        self.assertEqual(self.b.visual_rotate, 90)
+        self.assertEqual(self.b.visual_rotate, 270)
         commands = [c.args for c in self.b.command.await_args_list]
-        self.assertIn(('set_property', 'video-rotate', 90), commands)
+        self.assertIn(('set_property', 'video-rotate', 270), commands)
         self.assertIn(('set_property', 'geometry', '870x400'), commands)
 
     async def test_native_landscape_buffer_does_not_double_rotate(self):
@@ -131,7 +131,7 @@ class ApplyViewTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await task
         self.assertEqual(self.b.device_orientation, 3)
-        self.assertEqual(self.b.visual_rotate, 90)
+        self.assertEqual(self.b.visual_rotate, 270)
 
 
 if __name__ == '__main__':
