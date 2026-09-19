@@ -15,7 +15,7 @@ The plugin sends a desktop notification only for an error. Normal start, stop, a
 {"running":true,"state":"running","error":null}
 ```
 
-`state` must be `starting`, `running`, `stopping`, `disconnected`, `error`, or `stopped`.
+`state` must be `starting`, `running`, `stopping`, `disconnected`, `error`, or `stopped`. While running, status may also include `audio_muted` (boolean). The plugin ignores unknown fields.
 
 ## Install
 

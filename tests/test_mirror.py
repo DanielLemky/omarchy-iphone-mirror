@@ -79,6 +79,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                  patch('pymobiledevice3.remote.core_device.display_service.DisplayService',return_value=service), \
                  patch('pymobiledevice3.remote.core_device.screen_stream.open_media_receiver',return_value=(transport,'::2')), \
                  patch('pymobiledevice3.remote.core_device.vnc_server.VncStreamServer',Receiver), \
+                 patch('mirror.start_system_audio',AsyncMock(return_value=None)), \
                  patch('mirror.DirectPlayer',Player), patch('mirror.InputBridge',Bridge):
                 task=asyncio.create_task(app.capture())
                 try:

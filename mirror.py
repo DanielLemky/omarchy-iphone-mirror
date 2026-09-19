@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 
+from audio import start_system_audio
 from lifecycle import AlreadyRunning, Runtime, close_session, connect_service
 from usb_input import InputBridge
 
@@ -118,6 +119,16 @@ class Mirror:
         self.session_id = None
         self.cleaning_up = False
         self.loop = asyncio.get_running_loop()
+        self._audio = None
+
+    def _on_audio_toggle(self, muted):
+        if self._audio is not None:
+            self._audio.set_muted(muted)
+        extra = {'audio_muted': bool(muted)}
+        if self.player is not None and self.player.player.poll() is None:
+            extra['player_pid'] = self.player.player.pid
+        state = self.runtime.state.get('state') or 'running'
+        self.runtime.update(state, error=self.runtime.state.get('error'), **extra)
 
     def stop(self, error=None):
         if error and self.error is None and not self.stop_event.is_set() and not self.cleaning_up:
@@ -184,6 +195,7 @@ class Mirror:
             receiver = None
             tasks = []
             input_task = None
+            audio = None
             try:
                 service = await connect_service(lambda: DisplayService(rsd))
                 raw, receiver_ip = open_media_receiver(service, (8*1024*1024,4*1024*1024))
@@ -209,15 +221,19 @@ class Mirror:
                 receiver._active_transport = transport
                 tasks = [asyncio.create_task(receiver._udp_recv_and_pipe(transport)),
                          asyncio.create_task(receiver._rtcp_send_loop(transport))]
+                audio = await start_system_audio(rsd, self.session_id)
+                self._audio = audio
                 await asyncio.wait_for(self.player_ready.wait(), 15)
                 self.bridge = InputBridge(rsd, str(self.runtime.root/'mpv.sock'))
+                self.bridge.on_audio_toggle = self._on_audio_toggle
                 input_task = asyncio.create_task(self.bridge.run())
                 await asyncio.wait_for(self.bridge.ready.wait(), 12)
-                self.runtime.update('running', player_pid=self.player.player.pid)
+                self.runtime.update('running', player_pid=self.player.player.pid, audio_muted=True)
                 while not self.stop_event.is_set():
                     if self.runtime.state.get('error') != self.bridge.error:
                         self.runtime.update('running', error=self.bridge.error,
-                                            player_pid=self.player.player.pid)
+                                            player_pid=self.player.player.pid,
+                                            audio_muted=self.bridge.audio_muted)
                     if input_task.done():
                         # Error type only: never exception messages, locals or keys.
                         if not input_task.cancelled() and input_task.exception():
@@ -241,7 +257,8 @@ class Mirror:
                     bridge=self.bridge, input_task=input_task,
                     service=service, session_id=self.session_id,
                     stream_tasks=tasks, player=self.player, transport=transport,
-                    pli_tasks=receiver._pli_tasks if receiver else ())
+                    pli_tasks=receiver._pli_tasks if receiver else (),
+                    audio=audio)
                 if errors and self.error is None:
                     self.error = ', '.join(errors)
                 # The tunnel remains alive until ALL cleanup above has finished.
