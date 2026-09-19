@@ -93,8 +93,8 @@ class AgentSetupTests(unittest.TestCase):
     def test_no_and_multiple_phones_block_selection(self):
         for devices, code in (([], 'usb_phone_missing'), ([SimpleNamespace(is_usb=True), SimpleNamespace(is_usb=True)], 'multiple_usb_phones')):
             fake = SimpleNamespace(list_devices=AsyncMock(return_value=devices))
-            with patch.dict(sys.modules, {'pymobiledevice3.usbmux': fake}):
-                with self.assertRaises(agent.SetupError) as error:
+            with patch.dict(sys.modules, {'pymobiledevice3.usbmux': fake}), patch.object(agent, 'usb_diagnostic', return_value=agent.DiagnosticError('usb_phone_missing', 'No phone')):
+                with self.assertRaises(agent.DiagnosticError) as error:
                     asyncio.run(agent.select_usb())
             self.assertEqual(error.exception.code, code)
 
@@ -119,7 +119,7 @@ class AgentSetupTests(unittest.TestCase):
         for supported, enabled, code in ((False, True, 'unsupported_usb_version'), (True, False, 'developer_mode_required')):
             state = {'usb_transport_supported': supported, 'developer_mode': enabled, 'mounted_image_count': 0}
             with patch.object(agent, 'select_usb', new_callable=AsyncMock, return_value='test'), patch.object(agent, 'inspect_phone', new_callable=AsyncMock, return_value=state), patch.object(agent, 'change_phone', new_callable=AsyncMock) as change:
-                with self.assertRaises(agent.SetupError) as error:
+                with self.assertRaises(agent.DiagnosticError) as error:
                     asyncio.run(agent.execute('prepare-image'))
             self.assertEqual(error.exception.code, code)
             change.assert_not_awaited()
@@ -149,7 +149,7 @@ class AgentSetupTests(unittest.TestCase):
                 service.get_media_support_info = AsyncMock(return_value={'supportedFeatures': flags})
                 with patch.dict(sys.modules, {'connection': SimpleNamespace(get_tunnel=tunnel), 'pymobiledevice3.remote.core_device.display_service': SimpleNamespace(DisplayService=display)}):
                     if code:
-                        with self.assertRaises(agent.SetupError) as error:
+                        with self.assertRaises(agent.DiagnosticError) as error:
                             asyncio.run(agent.display_capabilities('test'))
                         self.assertEqual(error.exception.code, code)
                     else:
@@ -180,6 +180,35 @@ class AgentSetupTests(unittest.TestCase):
             result = subprocess.run(['bash', str(Path(__file__).resolve().parents[1] / 'setup-phone.sh'), 'plan'], env=os.environ | {'XDG_DATA_HOME': directory}, capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
         self.assertEqual(json.loads(result.stdout)['code'], 'installation_required')
+
+class WifiCheckTests(unittest.IsolatedAsyncioTestCase):
+    async def test_wifi_check_refuses_connected_usb(self):
+        with patch('pymobiledevice3.usbmux.list_devices', AsyncMock(return_value=[SimpleNamespace(is_usb=True)])), patch('connection.get_tunnel') as tunnel:
+            with self.assertRaises(agent.SetupError) as error:
+                await agent.execute('check-wifi')
+        self.assertEqual(error.exception.code, 'disconnect_usb')
+        tunnel.assert_not_called()
+
+    async def test_wifi_check_authenticates_without_starting_video(self):
+        tunnel = MagicMock()
+        display = MagicMock()
+        service = display.return_value.__aenter__.return_value
+        service.get_media_support_info = AsyncMock(return_value={'supportedFeatures': 972})
+        with patch('pymobiledevice3.usbmux.list_devices', AsyncMock(return_value=[])), \
+             patch('connection.get_tunnel', return_value=tunnel) as connect, \
+             patch('pymobiledevice3.remote.core_device.display_service.DisplayService', display):
+            answer = await agent.execute('check-wifi', 'selected-phone')
+        connect.assert_called_once_with('wifi', 'selected-phone')
+        self.assertTrue(answer['ok'])
+        self.assertFalse(answer['data']['mirroring_verified'])
+        service.start_video_stream.assert_not_called()
+
+    async def test_swapping_phones_blocks_mutation(self):
+        with patch.object(agent, 'select_usb', AsyncMock(return_value='other')), patch.object(agent, 'change_phone', AsyncMock()) as change:
+            with self.assertRaises(agent.SetupError) as error:
+                await agent.execute('pair-usb', 'original')
+        self.assertEqual(error.exception.code, 'phone_changed')
+        change.assert_not_awaited()
 
 
 if __name__ == '__main__':

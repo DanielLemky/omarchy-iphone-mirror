@@ -4,6 +4,20 @@ Install the application first. Phone preparation is separate from installation. 
 
 Only the combination in the README has been tested. This is not a promise that other iOS versions or developer images provide the required display service.
 
+## Resume the guided checks
+
+Run `iphone-mirror setup` from a terminal. Existing trust, Developer Mode, mounted
+images and Wi-Fi credentials are checked before asking for changes. After installing
+usbmuxd, unplug, unlock and reconnect the phone so the package's USB permissions apply.
+After an iOS upgrade or reboot, rerun setup to check whether the image needs mounting.
+Keep the phone unlocked and awake; `DeviceLocked` means unlock and retry the step,
+not reinstall the application. Timeouts can mean a change completed: recheck state
+before approving another attempt.
+
+Setup stops when the display service reports zero media features, with a compatibility
+message. Nonzero capabilities still need an actual viewer test. Startup errors appear
+in `iphone-mirror status` and desktop notifications when `notify-send` is available.
+
 ## 1. Connect and trust
 
 Connect one iPhone by USB. Unlock it and accept the Trust prompt if shown. Enter any passcode on the phone yourself. Never put a passcode in a command or diagnostic report.
@@ -84,3 +98,15 @@ iphone-mirror start  # USB if connected, otherwise Wi-Fi
 There is one launcher and no connection selector. The transport is selected only at startup; connecting or removing a cable does not switch an active session. Close and reopen the viewer to select again.
 
 An active USB or Wi-Fi connection does not prove that the phone is unlocked. This version has no lock-state or screen-power indicator.
+
+## Wi-Fi troubleshooting
+
+A saved pairing record is not proof of wireless connectivity. The guide offers a
+separate `check-wifi` test after USB is disconnected. It checks discovery,
+authentication and display capabilities without streaming video or sending input.
+Keep the phone unlocked on the same LAN. Check guest-network isolation and compare
+with the phone VPN temporarily disconnected. Tailscale exit-node users should check
+Allow Local Network Access. These are diagnostic possibilities, not automatic fixes.
+
+Close and reopen the viewer after changing the cable connection: transport selection
+happens at launch. Do not reset pairing or remount images solely because Wi-Fi fails.

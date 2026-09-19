@@ -1,5 +1,6 @@
 """On-demand USB mirror. No global hooks, VNC listener, or saved input."""
 import argparse
+from diagnostics import error_message, notify_failure, validate_features
 import asyncio
 import contextlib
 import json
@@ -186,6 +187,7 @@ class Mirror:
             input_task = None
             try:
                 service = await connect_service(lambda: DisplayService(rsd))
+                validate_features(await asyncio.wait_for(service.get_media_support_info(), 10))
                 raw, receiver_ip = open_media_receiver(service, (8*1024*1024,4*1024*1024))
                 transport = TrackedTransport(raw)
                 self.session_id = uuid.uuid4()
@@ -257,7 +259,8 @@ class Mirror:
             if capture in done:
                 await capture
         except Exception as error:
-            self.error = self.error or 'Connection failed ('+type(error).__name__+'). Check the connection, pairing, Developer Mode and developer image.'
+            self.error = self.error or error_message(error)
+            await asyncio.to_thread(notify_failure, self.error)
             log.error('Capture failed (%s)', type(error).__name__)
         finally:
             # A stop signal also wakes capture's loop. Do not cancel its
