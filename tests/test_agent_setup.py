@@ -27,6 +27,10 @@ class AgentSetupTests(unittest.TestCase):
             status, output = self.run_command(['plan'])
         self.assertEqual(status, 0)
         self.assertEqual(output['schema_version'], 1)
+        security = output['data']['security']
+        self.assertIn('/var/lib/lockdown', security)
+        self.assertIn('pymobiledevice3', security)
+        self.assertIn('Uninstalling does not delete them', security)
         guard.assert_not_called()
         execute.assert_not_called()
 

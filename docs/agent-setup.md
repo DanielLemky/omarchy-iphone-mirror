@@ -42,6 +42,16 @@ Except for `plan`, commands require one USB iPhone and an inactive viewer. Setup
 
 The phone must remain the same between approval and execution. If the user changes phones, stop and obtain approval for the new phone. Pairing records and device identifiers are not included in JSON. Counts and version/capability information are included.
 
+## Pairing records
+
+Tell the user where credentials are stored. Do not open, copy, or paste the files.
+
+- USB trust: `/var/lib/lockdown/*.plist` on Linux (usbmuxd). These files are often world-readable, and `/run/usbmuxd` is often reachable by every local account. This application does not change those host permissions.
+- Wi-Fi / CoreDevice pairing: `${XDG_DATA_HOME:-$HOME/.local/share}/pymobiledevice3/remote_*.plist`
+- Developer image cache: the same pymobiledevice3 data directory
+
+Uninstalling the application does not remove them. Turning off Developer Mode does not remove them. Never include pairing files, UDIDs, or `usbmux list` / `remote browse` output in a public issue.
+
 ## Results
 
 Example without approval:
@@ -71,7 +81,7 @@ Exit codes: `0` completed, `1` failed or blocked, `2` invalid arguments, `3` app
 >
 > Before each phone-changing command, explain its effect and ask for my approval. Use `--approve` only for the operation I approved. USB trust saves credentials. Revealing Developer Mode only makes its setting visible. Mounting may download a developer image. Wi-Fi pairing saves a separate network credential. Silence or a general request to install is not approval for these operations.
 >
-> Explain that Developer Mode reduces device security and permits developer-service access from trusted computers. Protect the computer and its pairing records. Turning off Developer Mode does not erase trust. Ask whether I understand and want to continue before revealing or enabling it.
+> Explain that Developer Mode reduces device security and permits developer-service access from trusted computers. USB pairing files are usually /var/lib/lockdown on Linux; Wi-Fi records and downloaded images use ~/.local/share/pymobiledevice3. Do not open or paste those files. Uninstalling does not delete them. Turning off Developer Mode does not erase trust. Ask whether I understand and want to continue before revealing or enabling it.
 >
 > I must handle phone actions myself. Tell me to open Settings, Privacy & Security, Developer Mode; enable it; approve the restart; unlock with my passcode; and confirm Turn On after restart. Wait for me. Never ask me to disclose my passcode. Then run `check` again. Do not enable or restart the phone automatically.
 >
