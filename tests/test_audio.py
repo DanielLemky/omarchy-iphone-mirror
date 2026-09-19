@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from audio import (
-    AAC_ELD_ASC_48K_STEREO_480, AudioSession, build_rtcp_rr, extend_seq, rtp_payload,
+    AudioSession, build_rtcp_rr, extend_seq, prepare_opus_packet, rtp_payload,
 )
 
 
@@ -16,6 +16,12 @@ class RtpTests(unittest.TestCase):
         rtcp = bytes([0x81, 201, 0, 7]) + b'\x00' * 28
         self.assertIsNone(rtp_payload(rtcp))
         self.assertIsNone(rtp_payload(b'\x00' * 8))
+
+    def test_rtp_padding_is_stripped(self):
+        payload = b'\x11\x22\x33'
+        header = bytes([0xA0, 101, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1])  # P bit
+        packet = header + payload + b'\x00\x02'
+        self.assertEqual(rtp_payload(packet), payload)
 
     def test_extension_header_is_skipped(self):
         payload = b'\xab'
@@ -42,14 +48,26 @@ class RtpTests(unittest.TestCase):
 
 
 class DecoderTests(unittest.TestCase):
-    def test_decoder_opens_with_coredevice_cookie(self):
+    def test_code1_odd_body_drops_trailing_byte(self):
+        packet = bytes([0x89]) + b'\x00' * 5  # 5-byte odd body
+        prepared = prepare_opus_packet(packet)
+        self.assertEqual(len(prepared), 5)
+        self.assertEqual(prepared, packet[:-1])
+
+    def test_code2_is_unchanged(self):
+        packet = bytes([0x8a]) + b'\x00' * 5
+        self.assertEqual(prepare_opus_packet(packet), packet)
+
+    def test_opus_decoder_opens(self):
+        from audio import OpusDecoder
         try:
-            from audio import AACELDDecoder
-            decoder = AACELDDecoder()
+            decoder = OpusDecoder()
         except Exception as error:
-            self.skipTest(f'AAC-ELD decoder unavailable ({type(error).__name__})')
-        self.assertEqual(decoder._context.extradata, AAC_ELD_ASC_48K_STEREO_480)
-        self.assertEqual(decoder.decode(b''), b'')
+            self.skipTest(f'libopus unavailable ({type(error).__name__})')
+        try:
+            self.assertTrue(decoder._decoder)
+        finally:
+            decoder.close()
 
 
 class SessionTests(unittest.IsolatedAsyncioTestCase):
@@ -71,7 +89,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_startup_failure_does_not_raise(self):
         from audio import start_system_audio
-        with patch('audio.AACELDDecoder', side_effect=RuntimeError('no decoder')):
+        with patch('audio.OpusDecoder', side_effect=RuntimeError('no decoder')):
             self.assertIsNone(await start_system_audio(Mock(), 'sid'))
 
 

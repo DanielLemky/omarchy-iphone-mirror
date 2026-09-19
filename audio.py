@@ -1,10 +1,12 @@
-"""System-audio RTP receive, AAC-ELD decode, and local PCM playback.
+"""System-audio RTP receive, Opus decode, and local PCM playback.
 
-Apple's CoreDevice display service can start a second RTP stream of the
-phone's speaker mix (AAC-ELD, 48 kHz stereo, 480 samples per frame).
-Xcode Device Mirroring pairs that stream with video using the same
-client session id. The pinned pymobiledevice3 decoder and AudioQueue
-player are macOS-only; this module is the Linux path.
+Apple's CoreDevice display service starts a second RTP stream of the
+phone's speaker mix. Xcode Device Mirroring pairs it with video using
+the same client session id. pymobiledevice3 documents this as AAC-ELD
+and decodes it with macOS AudioToolbox. On the wire the packets are
+Opus CELT (TOC config 17: 48 kHz, two 5 ms frames = 10 ms / 480
+samples). Code-1 packets sometimes carry a trailing pad byte so the
+body length is even.
 
 Audio is optional. A start or decode failure leaves video and input
 running. Payloads, PCM, and device identifiers are never logged.
@@ -13,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ctypes
+import ctypes.util
 import logging
 import queue
 import struct
@@ -23,30 +27,39 @@ from lifecycle import connect_service
 
 log = logging.getLogger('iphone-mirror.audio')
 
-# Captured from a CoreDevice Mirror handshake (AAC-ELD, 48 kHz stereo, 480-sample frames).
-AAC_ELD_ASC_48K_STEREO_480 = bytes([0xF8, 0xE6, 0x40, 0x00])
 PCM_RATE = 48000
 PCM_CHANNELS = 2
-PCM_FRAME_BYTES = 480 * PCM_CHANNELS * 2  # 10 ms s16le stereo
+PCM_FRAME_SAMPLES = 480  # 10 ms at 48 kHz (two Opus CELT 5 ms frames)
+PCM_FRAME_BYTES = PCM_FRAME_SAMPLES * PCM_CHANNELS * 2
 RTCP_INTERVAL = 1.0
 RECV_ERR_RECREATE = 5
+OPUS_MAX_FRAME = 5760
 
 
 def rtp_payload(packet: bytes) -> bytes | None:
-    """Return the RTP payload, or None for too-short / RTCP packets."""
+    """Return the RTP payload, or None for too-short / RTCP packets.
+
+    Strips RFC 3550 padding (P bit) so codec AUs are not left odd-sized.
+    """
     if len(packet) < 12:
         return None
     if 64 <= (packet[1] & 0x7F) <= 95:
         return None
+    end = len(packet)
+    if packet[0] & 0x20:
+        pad = packet[-1]
+        if pad == 0 or pad >= end:
+            return None
+        end -= pad
     header_len = 12 + (packet[0] & 0x0F) * 4
     if packet[0] & 0x10:
-        if header_len + 4 > len(packet):
+        if header_len + 4 > end:
             return None
         ext_len = int.from_bytes(packet[header_len + 2:header_len + 4], 'big')
         header_len += 4 + ext_len * 4
-    if header_len >= len(packet):
+    if header_len >= end:
         return None
-    return packet[header_len:]
+    return packet[header_len:end]
 
 
 def extend_seq(highest: int, seq: int) -> int:
@@ -76,40 +89,60 @@ def build_rtcp_rr(local_ssrc: int, remote_ssrc: int, highest_seq: int) -> bytes:
     return rr + sdes
 
 
-def _frame_to_s16le(frame) -> bytes:
-    array = frame.to_ndarray()
-    if array.dtype.kind == 'f':
-        array = (array.clip(-1.0, 1.0) * 32767.0).astype('int16')
-    else:
-        array = array.astype('int16', copy=False)
-    if array.ndim == 2:
-        if array.shape[0] <= 8:
-            array = array.T
-        array = array.reshape(-1)
-    return array.tobytes()
+def prepare_opus_packet(payload: bytes) -> bytes:
+    """Return a TOC+frames blob libopus will accept.
+
+    Code 1 (two equal frames) requires an even body. Some CoreDevice
+    packets include one extra trailing byte; dropping it recovers them.
+    """
+    if len(payload) < 2:
+        raise ValueError('short opus packet')
+    if (payload[0] & 3) == 1 and ((len(payload) - 1) & 1):
+        return payload[:-1]
+    return payload
 
 
-class AACELDDecoder:
-    """Decode one AAC-ELD access unit to packed s16le 48 kHz stereo PCM."""
+class OpusDecoder:
+    """Decode one CoreDevice Opus packet to packed s16le 48 kHz stereo PCM."""
 
     def __init__(self):
-        import av
-        from av.audio.resampler import AudioResampler
-        self._av = av
-        context = av.CodecContext.create('aac', 'r')
-        context.extradata = AAC_ELD_ASC_48K_STEREO_480
-        context.open()
-        self._context = context
-        self._resampler = AudioResampler(format='s16', layout='stereo', rate=PCM_RATE)
+        name = ctypes.util.find_library('opus') or 'libopus.so.0'
+        lib = ctypes.CDLL(name)
+        lib.opus_decoder_create.restype = ctypes.c_void_p
+        lib.opus_decoder_create.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+        lib.opus_decoder_destroy.argtypes = [ctypes.c_void_p]
+        lib.opus_decode.restype = ctypes.c_int
+        lib.opus_decode.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
+            ctypes.POINTER(ctypes.c_int16), ctypes.c_int, ctypes.c_int,
+        ]
+        err = ctypes.c_int()
+        decoder = lib.opus_decoder_create(PCM_RATE, PCM_CHANNELS, ctypes.byref(err))
+        if not decoder or err.value:
+            raise RuntimeError('opus decoder open failed')
+        self._lib = lib
+        self._decoder = decoder
+        self._pcm = (ctypes.c_int16 * (OPUS_MAX_FRAME * PCM_CHANNELS))()
 
-    def decode(self, au: bytes) -> bytes:
-        if not au:
-            return b''
-        pcm = bytearray()
-        for frame in self._context.decode(self._av.Packet(au)):
-            for out in self._resampler.resample(frame):
-                pcm.extend(_frame_to_s16le(out))
-        return bytes(pcm)
+    def decode(self, payload: bytes) -> bytes:
+        packet = prepare_opus_packet(payload)
+        buf = (ctypes.c_ubyte * len(packet)).from_buffer_copy(packet)
+        count = self._lib.opus_decode(
+            self._decoder, buf, len(packet), self._pcm, OPUS_MAX_FRAME, 0,
+        )
+        if count < 0:
+            count = self._lib.opus_decode(
+                self._decoder, None, 0, self._pcm, PCM_FRAME_SAMPLES, 0,
+            )
+            if count < 0:
+                return b''
+        return ctypes.string_at(self._pcm, count * PCM_CHANNELS * 2)
+
+    def close(self):
+        decoder = self._decoder
+        self._decoder = None
+        if decoder:
+            self._lib.opus_decoder_destroy(decoder)
 
 
 class PcmPlayer:
@@ -225,7 +258,7 @@ class AudioSession:
                         log.warning('Audio decode failed (%s); video continues', type(error).__name__)
                     if errors >= RECV_ERR_RECREATE:
                         try:
-                            self._decoder = AACELDDecoder()
+                            self._decoder = OpusDecoder()
                             errors = 0
                         except Exception:
                             pass
@@ -276,7 +309,10 @@ class AudioSession:
             with contextlib.suppress(Exception):
                 self._transport.close()
             self._transport = None
-        self._decoder = None
+        if self._decoder is not None:
+            with contextlib.suppress(Exception):
+                self._decoder.close()
+            self._decoder = None
 
 
 async def start_system_audio(rsd, session_id):
@@ -287,8 +323,9 @@ async def start_system_audio(rsd, session_id):
     service = None
     transport = None
     player = None
+    decoder = None
     try:
-        decoder = AACELDDecoder()
+        decoder = OpusDecoder()
         player = PcmPlayer()
         service = await connect_service(lambda: DisplayService(rsd))
         transport, receiver_ip = open_media_receiver(service, (4 * 1024 * 1024, 1 * 1024 * 1024))
@@ -311,6 +348,9 @@ async def start_system_audio(rsd, session_id):
         return session
     except Exception as error:
         log.error('Audio startup failed (%s)', type(error).__name__)
+        if decoder is not None:
+            with contextlib.suppress(Exception):
+                decoder.close()
         if player is not None:
             with contextlib.suppress(Exception):
                 player.close()
