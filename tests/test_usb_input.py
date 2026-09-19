@@ -15,8 +15,8 @@ class MappingTests(unittest.TestCase):
     def test_toolbar_bounds(self):
         dims = {'w':400, 'h':1000}
         self.assertEqual(toolbar_action({'x':100,'y':960,'hover':True},dims),'home')
-        self.assertEqual(toolbar_action({'x':200,'y':960,'hover':True},dims),'audio')
         self.assertEqual(toolbar_action({'x':300,'y':960,'hover':True},dims),'search')
+        self.assertEqual(toolbar_action({'x':360,'y':960,'hover':True},dims),'audio')
         self.assertIsNone(toolbar_action({'x':300,'y':910,'hover':True},dims))
         self.assertIsNone(toolbar_action({'x':300,'y':960,'hover':False},dims))
 
@@ -73,7 +73,7 @@ class InputTests(unittest.IsolatedAsyncioTestCase):
     async def test_toolbar_home(self):
         self.b.focused = True
         self.b.dimensions = {'w':400,'h':1000,'mb':80}
-        for x in (40,100):
+        for x in (80,160):
             self.b.mouse = {'x':x,'y':960,'hover':True}
             self.b.hid.send_touchscreen.reset_mock()
             self.b.indigo.send_button.reset_mock()
@@ -90,7 +90,7 @@ class InputTests(unittest.IsolatedAsyncioTestCase):
         self.b.focused = True
         self.b.dimensions = {'w':400,'h':1000}
         self.b.on_audio_toggle = toggles.append
-        self.b.mouse = {'x':200,'y':960,'hover':True}
+        self.b.mouse = {'x':360,'y':960,'hover':True}
         self.assertTrue(self.b.audio_muted)
         await self.b.key('dm-','MBTN_LEFT','')
         await self.b.gesture_task

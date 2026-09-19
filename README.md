@@ -29,7 +29,7 @@ The application owns video, input, and connection management. The plugin calls t
 - Direct HEVC playback in MPV with low-latency settings and a local cursor.
 - Plays the phone's speaker mix over a second CoreDevice RTP stream (AAC-ELD 48 kHz, 10 ms). Video continues if audio cannot start.
 - Taps, drags, vertical wheel scrolling, and focused-window keyboard input over USB or Wi-Fi.
-- Centered Home, speaker, and Spotlight buttons. Computer playback starts muted; the speaker toggle unmutes host audio without changing the phone volume. Home uses a hardware-button event; Spotlight uses Command+Space. Neither uses a swipe.
+- Centered Home and Spotlight buttons, with a speaker toggle on the right. Computer playback starts muted; the speaker toggle unmutes host audio without changing the phone volume. Home uses a hardware-button event; Spotlight uses Command+Space. Neither uses a swipe.
 - Input release on focus loss and shutdown. No toggle shortcut is required.
 - One application instance, private runtime files, and structured status.
 - Manual start only: no startup at login or when a USB cable is connected.

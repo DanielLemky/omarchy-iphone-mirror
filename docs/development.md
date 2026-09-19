@@ -4,7 +4,7 @@
 
 - `mirror.py`: video session, MPV process, control socket, signals, and ordered shutdown.
 - `audio.py`: optional CoreDevice system-audio RTP, AAC-ELD 480 decode, and local PCM playback.
-- `usb_input.py`: focused-window input, Home/speaker/Spotlight toolbar, and explicit clipboard paste.
+- `usb_input.py`: focused-window input, Home/Spotlight toolbar with a right-edge speaker toggle, and explicit clipboard paste.
 - `connection.py`: Auto selection, USB transport, and authenticated Wi-Fi discovery.
 - `lifecycle.py`: instance lock, private status, and cleanup.
 - `cli.py`: installed service control.

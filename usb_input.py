@@ -70,11 +70,11 @@ def toolbar_action(mouse, dimensions):
     x, y = mouse.get('x', -1), mouse.get('y', -1)
     if (mouse.get('hover') and w > 0 and h > 0
             and 0 <= x < w and h*(1-TOOLBAR_RATIO) <= y < h):
-        if x < w / 3:
-            return 'home'
-        if x < 2 * w / 3:
+        # Home | Spotlight stay split at center; speaker uses a right-edge strip.
+        audio_left = w - max(w * 0.18, 56)
+        if x >= audio_left:
             return 'audio'
-        return 'search'
+        return 'home' if x < w / 2 else 'search'
     return None
 
 def key_usages(name, text=''):
@@ -173,12 +173,20 @@ class InputBridge:
         ui = load_ui()
         size = min(ui['icon_size'], (h-top)*.45)
         scale = size/24
-        spacing = min(ui['button_spacing'], w*.18)
+        spacing = min(ui['button_spacing'], w*.2)
         y = center-size/2
-        home_x = w/2-spacing-size/2
+        home_x = w/2-spacing/2-size/2
         icon = (rf'{{\an7\pos({home_x},{y})\bord0\shad0\1c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
                 'm 12 1 l 1 11 3 13 5 11 5 23 10 23 10 16 14 16 14 23 19 23 19 11 21 13 23 11 12 1')
-        audio_x = w/2-size/2
+        search_x = w/2+spacing/2-size/2
+        search = (rf'{{\an7\pos({search_x},{y})\bord2\shad0\1a&HFF&\3c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
+                  'm 10 2 b 5.6 2 2 5.6 2 10 b 2 14.4 5.6 18 10 18 '
+                  'b 14.4 18 18 14.4 18 10 b 18 5.6 14.4 2 10 2 '
+                  'm 16 16 l 23 23')
+        pad = max(8.0, size * 0.4)
+        audio_x = w - size - pad
+        if audio_x < search_x + size:
+            audio_x = search_x + size + pad
         speaker = (rf'{{\an7\pos({audio_x},{y})\bord0\shad0\1c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
                    'm 2 9 l 8 9 14 4 14 20 8 15 2 15')
         if self.audio_muted:
@@ -189,13 +197,8 @@ class InputBridge:
             waves = (rf'{{\an7\pos({audio_x},{y})\bord2\shad0\1a&HFF&\3c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
                      'm 17 8 b 20 12 20 12 17 16 m 19 6 b 24 12 24 12 19 18')
             audio_events = [speaker, waves]
-        search_x = w/2+spacing-size/2
-        search = (rf'{{\an7\pos({search_x},{y})\bord2\shad0\1a&HFF&\3c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
-                  'm 10 2 b 5.6 2 2 5.6 2 10 b 2 14.4 5.6 18 10 18 '
-                  'b 14.4 18 18 14.4 18 10 b 18 5.6 14.4 2 10 2 '
-                  'm 16 16 l 23 23')
         await self.command('osd-overlay', 61, 'ass-events',
-                           '\n'.join([background, icon, *audio_events, search]), w, h)
+                           '\n'.join([background, icon, search, *audio_events]), w, h)
 
     async def search_button(self):
         """Request Spotlight with Command+Space; no touch gesture."""
