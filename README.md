@@ -203,6 +203,7 @@ The prototype sometimes left the developer display service unresponsive after a 
 
 ## Known limits
 
+- **Phone calls interrupt mirroring on the tested configuration** (USB, ARM64 Omarchy, iPhone 13, iOS 27.0). Video stopped when a call began, even with the phone screen on. The viewer then closed after 15 seconds without media packets. Starting a new session during the call failed. After the call ends, reopen iPhone Mirror; restarting restored live video without a pairing reset or image remount. Other configurations and call types have not been verified.
 - Lower video latency is confirmed by user testing of the prototype, but it has not been measured end to end.
 - International keyboard layouts, IME, multitouch, and horizontal wheel scrolling are not complete.
 - An input-service failure disables input but leaves video running. A fresh click attempts reconnection without replaying the click or failed keys.
