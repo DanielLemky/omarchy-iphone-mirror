@@ -1,6 +1,6 @@
 # Agent-assisted installation and phone setup
 
-Use v0.1.1 or later for these commands. Version v0.1.1 fixes a false `unknown_display_features` result caused by rejecting the library's integer types. No phone pairing reset or image remount is needed for that fix. Use the README install command with `--skip-phone-setup` appended, then run these commands from the retained source directory printed by the installer. The existing interactive guide is unchanged. Real-phone validation of the new commands is still pending.
+Use the version specified in the repository README install command, with `--skip-phone-setup` appended. After installation, read this document from the retained release directory printed by the installer. Do not mix instructions from another release or development checkout with the installed code. The existing interactive guide is unchanged. Real-phone validation of the new commands is still pending.
 
 An agent can run computer commands and explain the next phone action. It cannot enter your passcode or approve Trust and Developer Mode prompts for you.
 
@@ -57,7 +57,7 @@ Exit codes: `0` completed, `1` failed or blocked, `2` invalid arguments, `3` app
 
 ## Prompt to give an agent
 
-> Help me install and set up Omarchy iPhone Mirror. Read the repository README and agent setup instructions first. Use the documented release, not development HEAD, unless I explicitly approve development testing. If that release lacks the structured setup commands, explain this and stop rather than inventing commands.
+> Help me install and set up Omarchy iPhone Mirror. Read the repository README and use the version specified in its install command, with `--skip-phone-setup` appended. Do not use development HEAD unless I explicitly approve development testing. After installation, read the agent setup instructions from the retained release directory printed by the installer, so that the instructions match the installed code. If that release lacks the structured setup commands, explain this and stop rather than inventing commands.
 >
 > Check computer requirements and existing installation. Ask before adding system packages. Do not use sudo for the app installer. Install with phone setup skipped so that you can request each approval separately. Preserve unrelated applications, settings, and pairing records.
 >
