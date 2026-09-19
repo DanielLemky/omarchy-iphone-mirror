@@ -111,6 +111,10 @@ Follow the guide that starts after installation, or run it again later:
 
 You can instead follow the [manual phone setup instructions](docs/phone-setup.md). Installing the application alone does not complete phone preparation. Setup does not start the viewer, and successful setup commands do not prove display-service compatibility.
 
+## Agent-assisted setup
+
+The release includes separate JSON setup commands and a copy-and-paste agent prompt. See [agent setup instructions](docs/agent-setup.md). Phone changes still require individual approval, and passcodes and phone confirmations remain human-only. Real-phone testing of these new commands is still pending.
+
 ## Commands
 
 ```sh

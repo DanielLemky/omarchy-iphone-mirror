@@ -191,7 +191,10 @@ def prepare():
     print('images or reset pairing without checking the reported error first.')
 
 
-def main():
+def main(argv=None):
+    if argv:
+        from phone_setup_agent import run_command as agent_main
+        return agent_main(argv)
     if not sys.stdin.isatty():
         print('Phone setup requires an interactive terminal. No phone changes were made.', file=sys.stderr)
         return 1
@@ -230,4 +233,4 @@ def main():
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))
