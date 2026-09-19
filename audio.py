@@ -251,12 +251,12 @@ def _pcm_player_command():
     if pw_cat:
         return [pw_cat, '--playback', '--raw', '--format', 's16',
                 '--rate', str(PCM_RATE), '--channels', str(PCM_CHANNELS),
-                '--latency', '80ms', '--media-role', 'Communication', '-']
+                '--latency', '100ms', '--media-role', 'Music', '-']
     paplay = shutil.which('paplay')
     if paplay:
         return [paplay, '--raw', f'--rate={PCM_RATE}',
                 f'--channels={PCM_CHANNELS}', '--format=s16le',
-                '--latency-msec=80']
+                '--latency-msec=100']
     mpv = shutil.which('mpv')
     if not mpv:
         raise RuntimeError('no PCM player')

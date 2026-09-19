@@ -94,6 +94,16 @@ class DecoderTests(unittest.TestCase):
         self.assertTrue(command)
         self.assertIn(command[0].rsplit('/', 1)[-1], {'pw-cat', 'paplay', 'mpv'})
 
+    def test_pcm_player_uses_music_role_and_100ms(self):
+        from audio import _pcm_player_command
+        with patch('audio.shutil.which', side_effect=lambda name: '/usr/bin/pw-cat' if name == 'pw-cat' else None):
+            command = _pcm_player_command()
+        self.assertEqual(command[0], '/usr/bin/pw-cat')
+        self.assertIn('--latency', command)
+        self.assertEqual(command[command.index('--latency') + 1], '100ms')
+        self.assertIn('--media-role', command)
+        self.assertEqual(command[command.index('--media-role') + 1], 'Music')
+
     def test_muted_player_writes_silence(self):
         from audio import PcmPlayer
         with patch('audio.subprocess.Popen') as popen:
