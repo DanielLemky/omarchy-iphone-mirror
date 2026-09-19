@@ -280,6 +280,7 @@ class PcmPlayer:
         self._inq = queue.Queue(maxsize=50)
         self._stop = threading.Event()
         self._dropped = 0
+        self.muted = True
         self.player = subprocess.Popen(
             _pcm_player_command(),
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
@@ -289,7 +290,7 @@ class PcmPlayer:
         self._thread.start()
 
     def play(self, pcm: bytes):
-        if not pcm or self._stop.is_set():
+        if not pcm or self._stop.is_set() or self.muted:
             return
         try:
             self._inq.put_nowait(pcm)
@@ -343,6 +344,10 @@ class AudioSession:
         self._closed = False
         self._tasks = []
         self._decode_warned = False
+
+    def set_muted(self, muted):
+        if self._player is not None:
+            self._player.muted = bool(muted)
 
     def start(self):
         self._tasks = [

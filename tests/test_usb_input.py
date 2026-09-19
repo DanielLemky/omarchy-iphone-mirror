@@ -15,6 +15,7 @@ class MappingTests(unittest.TestCase):
     def test_toolbar_bounds(self):
         dims = {'w':400, 'h':1000}
         self.assertEqual(toolbar_action({'x':100,'y':960,'hover':True},dims),'home')
+        self.assertEqual(toolbar_action({'x':200,'y':960,'hover':True},dims),'audio')
         self.assertEqual(toolbar_action({'x':300,'y':960,'hover':True},dims),'search')
         self.assertIsNone(toolbar_action({'x':300,'y':910,'hover':True},dims))
         self.assertIsNone(toolbar_action({'x':300,'y':960,'hover':False},dims))
@@ -72,7 +73,7 @@ class InputTests(unittest.IsolatedAsyncioTestCase):
     async def test_toolbar_home(self):
         self.b.focused = True
         self.b.dimensions = {'w':400,'h':1000,'mb':80}
-        for x in (80,160):
+        for x in (40,100):
             self.b.mouse = {'x':x,'y':960,'hover':True}
             self.b.hid.send_touchscreen.reset_mock()
             self.b.indigo.send_button.reset_mock()
@@ -83,6 +84,24 @@ class InputTests(unittest.IsolatedAsyncioTestCase):
             buttons = self.b.indigo.send_button.await_args_list
             self.assertEqual([c.args for c in buttons], [(12,64,1),(12,64,2)])
             self.assertIsNone(self.b.contact)
+
+    async def test_toolbar_audio_toggles_without_hid(self):
+        toggles = []
+        self.b.focused = True
+        self.b.dimensions = {'w':400,'h':1000}
+        self.b.on_audio_toggle = toggles.append
+        self.b.mouse = {'x':200,'y':960,'hover':True}
+        self.assertTrue(self.b.audio_muted)
+        await self.b.key('dm-','MBTN_LEFT','')
+        await self.b.gesture_task
+        self.assertEqual(toggles, [False])
+        self.assertFalse(self.b.audio_muted)
+        self.b.indigo.send_button.assert_not_awaited()
+        self.b.hid.send_touchscreen.assert_not_awaited()
+        await self.b.key('dm-','MBTN_LEFT','')
+        await self.b.gesture_task
+        self.assertEqual(toggles, [False, True])
+        self.assertTrue(self.b.audio_muted)
 
     async def test_cancel_toolbar_gesture(self):
         import asyncio

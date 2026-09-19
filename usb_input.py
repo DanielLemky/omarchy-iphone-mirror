@@ -70,7 +70,11 @@ def toolbar_action(mouse, dimensions):
     x, y = mouse.get('x', -1), mouse.get('y', -1)
     if (mouse.get('hover') and w > 0 and h > 0
             and 0 <= x < w and h*(1-TOOLBAR_RATIO) <= y < h):
-        return 'home' if x < w/2 else 'search'
+        if x < w / 3:
+            return 'home'
+        if x < 2 * w / 3:
+            return 'audio'
+        return 'search'
     return None
 
 def key_usages(name, text=''):
@@ -123,6 +127,8 @@ class InputBridge:
         self.scrolling = False
         self.scroll_pending = 0.0
         self.paste_cancel_until = 0.0
+        self.audio_muted = True
+        self.on_audio_toggle = None
 
     async def scroll_wheel(self):
         try:
@@ -167,16 +173,29 @@ class InputBridge:
         ui = load_ui()
         size = min(ui['icon_size'], (h-top)*.45)
         scale = size/24
-        spacing = min(ui['button_spacing'], w*.2)
-        x, y = w/2-spacing/2-size/2, center-size/2
-        icon = (rf'{{\an7\pos({x},{y})\bord0\shad0\1c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
+        spacing = min(ui['button_spacing'], w*.18)
+        y = center-size/2
+        home_x = w/2-spacing-size/2
+        icon = (rf'{{\an7\pos({home_x},{y})\bord0\shad0\1c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
                 'm 12 1 l 1 11 3 13 5 11 5 23 10 23 10 16 14 16 14 23 19 23 19 11 21 13 23 11 12 1')
-        search_x = w/2+spacing/2-size/2
+        audio_x = w/2-size/2
+        speaker = (rf'{{\an7\pos({audio_x},{y})\bord0\shad0\1c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
+                   'm 2 9 l 8 9 14 4 14 20 8 15 2 15')
+        if self.audio_muted:
+            slash = (rf'{{\an7\pos({audio_x},{y})\bord2\shad0\1a&HFF&\3c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
+                     'm 4 4 l 20 20')
+            audio_events = [speaker, slash]
+        else:
+            waves = (rf'{{\an7\pos({audio_x},{y})\bord2\shad0\1a&HFF&\3c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
+                     'm 17 8 b 20 12 20 12 17 16 m 19 6 b 24 12 24 12 19 18')
+            audio_events = [speaker, waves]
+        search_x = w/2+spacing-size/2
         search = (rf'{{\an7\pos({search_x},{y})\bord2\shad0\1a&HFF&\3c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
                   'm 10 2 b 5.6 2 2 5.6 2 10 b 2 14.4 5.6 18 10 18 '
                   'b 14.4 18 18 14.4 18 10 b 18 5.6 14.4 2 10 2 '
                   'm 16 16 l 23 23')
-        await self.command('osd-overlay', 61, 'ass-events', '\n'.join([background,icon,search]), w, h)
+        await self.command('osd-overlay', 61, 'ass-events',
+                           '\n'.join([background, icon, *audio_events, search]), w, h)
 
     async def search_button(self):
         """Request Spotlight with Command+Space; no touch gesture."""
@@ -209,6 +228,16 @@ class InputBridge:
                 self.home_down = False
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(self.indigo.send_button(0x0C, 0x40, HID_BUTTON_STATE_UP), 1)
+            self.gesture_task = None
+
+    async def audio_button(self):
+        """Toggle computer playback. Does not change the phone volume."""
+        try:
+            self.audio_muted = not self.audio_muted
+            if self.on_audio_toggle is not None:
+                self.on_audio_toggle(self.audio_muted)
+            await self.draw_toolbar()
+        finally:
             self.gesture_task = None
 
     async def command(self, *args):
@@ -375,7 +404,12 @@ class InputBridge:
                 button = toolbar_action(self.mouse, self.dimensions)
                 if button is not None:
                     await self.release()
-                    task = self.home_button() if button == 'home' else self.search_button()
+                    if button == 'home':
+                        task = self.home_button()
+                    elif button == 'audio':
+                        task = self.audio_button()
+                    else:
+                        task = self.search_button()
                     self.gesture_task = asyncio.create_task(task)
                     return
                 pos = touch_position(self.mouse, self.dimensions)

@@ -94,6 +94,24 @@ class DecoderTests(unittest.TestCase):
         self.assertTrue(command)
         self.assertIn(command[0].rsplit('/', 1)[-1], {'pw-cat', 'paplay', 'mpv'})
 
+    def test_muted_player_drops_pcm(self):
+        from audio import PcmPlayer
+        with patch('audio.subprocess.Popen') as popen:
+            proc = Mock()
+            proc.poll.return_value = None
+            proc.stdin = Mock()
+            popen.return_value = proc
+            player = PcmPlayer()
+            try:
+                self.assertTrue(player.muted)
+                player.play(b'\x00\x01' * 10)
+                self.assertTrue(player._inq.empty())
+                player.muted = False
+                player.play(b'\x00\x01' * 10)
+                self.assertEqual(player._inq.qsize(), 1)
+            finally:
+                player.close()
+
     def test_unwrap_is_identity_for_coredevice_payload(self):
         payload = FIXTURE_1KHZ.read_bytes()
         self.assertEqual(unwrap_coredevice_au(payload), payload)
