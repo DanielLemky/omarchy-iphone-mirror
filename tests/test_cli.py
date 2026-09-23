@@ -31,6 +31,49 @@ class CliTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[0].args[0][-1], cli.LEGACY_SERVICE)
         self.assertEqual(run.call_args_list[1].args[0][-1], cli.SERVICE)
 
+    @mock.patch('cli.time.sleep')
+    @mock.patch('cli._systemctl')
+    @mock.patch('cli.send_command')
+    @mock.patch('cli._read_state', return_value={'state':'stopping','player_pid':123})
+    @mock.patch('cli.service_is_active')
+    def test_start_waits_for_closed_window_cleanup(self, active, _state, focus, systemctl, sleep):
+        def is_active(service=cli.SERVICE):
+            if service == cli.LEGACY_SERVICE:
+                return False
+            return next(states)
+        states=iter((True, True, False))
+        active.side_effect=is_active
+        cli.start()
+        focus.assert_not_called()
+        sleep.assert_called_once_with(.1)
+        self.write_request.assert_called_once_with('auto',None)
+        systemctl.assert_called_once_with('start',cli.SERVICE)
+
+    @mock.patch('cli.time.sleep')
+    @mock.patch('cli.time.monotonic', side_effect=(0, 61))
+    @mock.patch('cli.send_command')
+    @mock.patch('cli._read_state', return_value={'state':'stopping','player_pid':123})
+    @mock.patch('cli.service_is_active')
+    def test_start_does_not_launch_second_service_during_stuck_cleanup(self, active, _state, focus, clock, sleep):
+        active.side_effect=lambda service=cli.SERVICE: service != cli.LEGACY_SERVICE
+        with self.assertRaisesRegex(cli.CliError, 'still closing'):
+            cli.start()
+        focus.assert_not_called()
+        self.write_request.assert_not_called()
+        sleep.assert_not_called()
+
+    @mock.patch('cli.time.sleep')
+    @mock.patch('cli._systemctl')
+    @mock.patch('cli.pid_is_alive', return_value=False)
+    @mock.patch('cli._read_state', return_value={'state':'running','player_pid':123})
+    @mock.patch('cli.service_is_active')
+    def test_start_waits_for_dead_window_even_if_state_says_running(self, active, _state, alive, systemctl, sleep):
+        states=iter((True, False))
+        active.side_effect=lambda service=cli.SERVICE: False if service==cli.LEGACY_SERVICE else next(states)
+        cli.start()
+        systemctl.assert_called_once_with('start',cli.SERVICE)
+        sleep.assert_not_called()
+
     @mock.patch("cli.subprocess.run")
     def test_start_refuses_active_legacy_service(self, run):
         run.return_value = self.completed(0)

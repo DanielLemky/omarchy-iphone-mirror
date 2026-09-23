@@ -17,6 +17,7 @@ from typing import Any
 SERVICE = "iphone-mirror.service"
 LEGACY_SERVICE = "iphone-usb-mirror.service"
 STOP_TIMEOUT = 25.0
+CLOSING_TIMEOUT = 60.0
 
 
 class CliError(RuntimeError):
@@ -197,8 +198,20 @@ def start(connection=None, serial=None) -> None:
         if ((connection is not None and connection not in ('auto',state.get('connection'),state.get('requested_connection')))
                 or (serial is not None and serial != state.get('serial'))):
             raise CliError('The mirror is running in another mode. Stop it before selecting a different mode.')
-        send_command("focus")
-        return
+        player_pid = state.get('player_pid')
+        closing = (state.get('state') == 'stopping' or
+                   (isinstance(player_pid, int) and not isinstance(player_pid, bool)
+                    and not pid_is_alive(player_pid)))
+        if not closing:
+            send_command("focus")
+            return
+        # The window can close before USB/Wi-Fi cleanup finishes. Do not try
+        # to focus that dead window or start a second service during teardown.
+        deadline = time.monotonic() + CLOSING_TIMEOUT
+        while service_is_active():
+            if time.monotonic() >= deadline:
+                raise CliError('The previous mirror session is still closing. Try again shortly.')
+            time.sleep(.1)
     write_launch_request(connection or 'auto',serial)
     _systemctl("start", SERVICE)
 

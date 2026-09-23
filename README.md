@@ -127,7 +127,7 @@ iphone-mirror reload-ui   # Redraw toolbar without restarting capture
 
 The window shows connection status while it starts. If the connection fails or disconnects, the window stays open and shows **Retry Connection**. Click the button, or press Enter, to try again in the same window. Connection setup has a 30-second limit after the window opens; opening the window and cleanup can take longer. Retry closes the previous phone session before selecting the connection again.
 
-Closing the viewer also stops the session. Existing window focus uses Hyprland. Logs are available with:
+Closing the viewer also stops the session. If you launch it again while the previous session is still closing, the launcher waits for cleanup before it starts a new window. Existing window focus uses Hyprland. Logs are available with:
 
 ```sh
 journalctl --user -u iphone-mirror -n 30 --no-pager
