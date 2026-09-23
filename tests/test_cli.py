@@ -43,7 +43,10 @@ class CliTests(unittest.TestCase):
             return next(states)
         states=iter((True, True, False))
         active.side_effect=is_active
-        cli.start()
+        with mock.patch('cli.closing_window') as closing:
+            closing.return_value.__enter__.return_value.poll.return_value=None
+            cli.start()
+        closing.assert_called_once_with()
         focus.assert_not_called()
         sleep.assert_called_once_with(.1)
         self.write_request.assert_called_once_with('auto',None)
@@ -56,8 +59,10 @@ class CliTests(unittest.TestCase):
     @mock.patch('cli.service_is_active')
     def test_start_does_not_launch_second_service_during_stuck_cleanup(self, active, _state, focus, clock, sleep):
         active.side_effect=lambda service=cli.SERVICE: service != cli.LEGACY_SERVICE
-        with self.assertRaisesRegex(cli.CliError, 'still closing'):
-            cli.start()
+        with mock.patch('cli.closing_window') as closing:
+            closing.return_value.__enter__.return_value.poll.return_value=None
+            with self.assertRaisesRegex(cli.CliError, 'still closing'):
+                cli.start()
         focus.assert_not_called()
         self.write_request.assert_not_called()
         sleep.assert_not_called()
@@ -70,9 +75,24 @@ class CliTests(unittest.TestCase):
     def test_start_waits_for_dead_window_even_if_state_says_running(self, active, _state, alive, systemctl, sleep):
         states=iter((True, False))
         active.side_effect=lambda service=cli.SERVICE: False if service==cli.LEGACY_SERVICE else next(states)
-        cli.start()
+        with mock.patch('cli.closing_window') as closing:
+            closing.return_value.__enter__.return_value.poll.return_value=None
+            cli.start()
+        closing.assert_called_once_with()
         systemctl.assert_called_once_with('start',cli.SERVICE)
         sleep.assert_not_called()
+
+    @mock.patch('cli._systemctl')
+    @mock.patch('cli._read_state', return_value={'state':'stopping'})
+    @mock.patch('cli.service_is_active')
+    def test_closing_window_exit_cancels_launch(self, active, _state, systemctl):
+        active.side_effect=lambda service=cli.SERVICE: service != cli.LEGACY_SERVICE
+        with mock.patch('cli.closing_window') as closing:
+            closing.return_value.__enter__.return_value.poll.return_value=0
+            with self.assertRaisesRegex(cli.CliError, 'Launch cancelled'):
+                cli.start()
+        self.write_request.assert_not_called()
+        systemctl.assert_not_called()
 
     @mock.patch("cli.subprocess.run")
     def test_start_refuses_active_legacy_service(self, run):
