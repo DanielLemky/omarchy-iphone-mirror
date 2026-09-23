@@ -125,6 +125,8 @@ iphone-mirror status      # JSON status; no USB connection is opened
 iphone-mirror reload-ui   # Redraw toolbar without restarting capture
 ```
 
+The window shows connection status while it starts. If the connection fails or disconnects, the window stays open and shows **Retry Connection**. Click the button, or press Enter, to try again in the same window. Connection setup has a 30-second limit after the window opens; opening the window and cleanup can take longer. Retry closes the previous phone session before selecting the connection again.
+
 Closing the viewer also stops the session. Existing window focus uses Hyprland. Logs are available with:
 
 ```sh
@@ -137,7 +139,7 @@ The old prototype uses `iphone-usb-mirror.service`. The new application refuses 
 
 There is one **iPhone Mirror** launcher. Each new session uses USB if a matching phone is connected; otherwise it uses Wi-Fi. No connection selector or settings dialog is needed.
 
-Connecting or removing a cable does not change an active session. Close and reopen the viewer to select the available connection again. An attached USB phone with a connection error does not silently fall back to Wi-Fi. `iphone-mirror start` focuses an existing session without changing it.
+Connecting or removing a cable does not change an active session. After a failure or disconnect, use **Retry Connection** to select the available connection again. You can also close and reopen the viewer. An attached USB phone with a connection error does not silently fall back to Wi-Fi. `iphone-mirror start` focuses an existing session without changing it.
 
 Explicit CLI options remain available for diagnostics: `--connection usb`, `--connection wifi`, and `--serial DEVICE_UDID`.
 
