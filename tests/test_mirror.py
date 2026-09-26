@@ -50,12 +50,13 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     await stop_event.wait()
                     return False
                 window.wait_retry=AsyncMock(side_effect=wait_retry)
-                async def capture():
+                async def capture(selected=None):
                     app.connected=connected
                     raise ConnectionError()
                 app.capture=capture
                 try:
-                    with patch('mirror.DirectPlayer', return_value=window):
+                    with patch('mirror.DirectPlayer', return_value=window), \
+                         patch('connection.select_connection', AsyncMock(return_value=('wifi', None))):
                         task=asyncio.create_task(app.run())
                         for _ in range(100):
                             if window.status.await_count == 2:
@@ -117,7 +118,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             window.status=AsyncMock()
             window.wait_retry=AsyncMock(return_value=True)
             attempts=[]
-            async def capture():
+            async def capture(selected=None):
                 attempts.append(True)
                 if len(attempts) == 1:
                     app.cleaning_up=True
@@ -134,7 +135,8 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 app.stop()
             app.capture=capture
             try:
-                with patch('mirror.DirectPlayer', return_value=window) as factory:
+                with patch('mirror.DirectPlayer', return_value=window) as factory, \
+                     patch('connection.select_connection', AsyncMock(return_value=('wifi', None))):
                     await asyncio.wait_for(app.run(), 2)
                 self.assertEqual(len(attempts), 2)
                 factory.assert_called_once()
@@ -299,6 +301,74 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 server.close()
                 await server.wait_closed()
 
+    async def test_usb_start_prepares_missing_image_before_capture(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime=Runtime(Path(root)/'runtime').acquire()
+            app=Mirror(runtime)
+            window=Mock()
+            window.player.pid=123
+            window.status=AsyncMock()
+            app.capture=AsyncMock()
+            async def prepare(serial, on_missing):
+                self.assertEqual(serial, 'device')
+                await on_missing()
+                return True
+            try:
+                with patch('mirror.DirectPlayer', return_value=window), \
+                     patch('connection.select_connection', AsyncMock(return_value=('usb', 'device'))), \
+                     patch('image_preparation.ensure_usb_image', side_effect=prepare):
+                    await app.start_capture()
+                self.assertEqual([c.args[0] for c in window.status.await_args_list],
+                                 ['Connecting to iPhone...', 'Preparing iPhone...', 'Connecting to iPhone...'])
+                app.capture.assert_awaited_once_with(('usb', 'device'))
+            finally:
+                runtime.close()
+
+    async def test_wifi_start_never_prepares_image(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime=Runtime(Path(root)/'runtime').acquire()
+            app=Mirror(runtime)
+            window=Mock()
+            window.player.pid=123
+            window.status=AsyncMock()
+            app.capture=AsyncMock()
+            try:
+                with patch('mirror.DirectPlayer', return_value=window), \
+                     patch('connection.select_connection', AsyncMock(return_value=('wifi', None))), \
+                     patch('image_preparation.ensure_usb_image', new_callable=AsyncMock) as prepare:
+                    await app.start_capture()
+                prepare.assert_not_awaited()
+                app.capture.assert_awaited_once_with(('wifi', None))
+            finally:
+                runtime.close()
+
+    async def test_image_preparation_timeout_waits_for_cleanup(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime=Runtime(Path(root)/'runtime').acquire()
+            app=Mirror(runtime)
+            window=Mock()
+            window.player.pid=123
+            window.status=AsyncMock()
+            app.capture=AsyncMock()
+            cleaned=asyncio.Event()
+            async def prepare(serial, on_missing):
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    await asyncio.sleep(.03)
+                    cleaned.set()
+            try:
+                with patch('mirror.DirectPlayer', return_value=window), \
+                     patch('connection.select_connection', AsyncMock(return_value=('usb', 'device'))), \
+                     patch('image_preparation.ensure_usb_image', side_effect=prepare), \
+                     patch('mirror.IMAGE_PREP_TIMEOUT', .01):
+                    with self.assertRaises(TimeoutError):
+                        await app.start_capture()
+                self.assertTrue(cleaned.is_set())
+                app.capture.assert_not_awaited()
+            finally:
+                runtime.close()
+
     async def test_connection_startup_timeout_waits_for_cleanup(self):
         with tempfile.TemporaryDirectory() as root:
             runtime=Runtime(Path(root)/'runtime').acquire()
@@ -308,7 +378,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             window.status=AsyncMock()
             cleanup_started=asyncio.Event()
             cleanup_done=asyncio.Event()
-            async def blocked_capture():
+            async def blocked_capture(selected=None):
                 try:
                     await asyncio.Event().wait()
                 finally:
@@ -317,7 +387,8 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     cleanup_done.set()
             app.capture=blocked_capture
             try:
-                with patch('mirror.DirectPlayer', return_value=window), patch('mirror.CONNECT_TIMEOUT', .01):
+                with patch('mirror.DirectPlayer', return_value=window), patch('mirror.CONNECT_TIMEOUT', .01), \
+                     patch('connection.select_connection', AsyncMock(return_value=('wifi', None))):
                     with self.assertRaises(TimeoutError):
                         await asyncio.wait_for(app.start_capture(), 1)
                 self.assertTrue(cleanup_started.is_set())
@@ -333,7 +404,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             window.player.pid=123
             window.status=AsyncMock()
             cleaned=asyncio.Event()
-            async def failing_capture():
+            async def failing_capture(selected=None):
                 try:
                     await asyncio.sleep(.005)
                     raise ConnectionError()
@@ -343,7 +414,8 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     cleaned.set()
             app.capture=failing_capture
             try:
-                with patch('mirror.DirectPlayer', return_value=window), patch('mirror.CONNECT_TIMEOUT', .05):
+                with patch('mirror.DirectPlayer', return_value=window), patch('mirror.CONNECT_TIMEOUT', .05), \
+                     patch('connection.select_connection', AsyncMock(return_value=('wifi', None))):
                     with self.assertRaises(ConnectionError):
                         await asyncio.wait_for(app.start_capture(), 1)
                 self.assertTrue(cleaned.is_set())

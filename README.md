@@ -39,7 +39,7 @@ The application owns video, input, and connection management. The plugin calls t
 - Omarchy/Linux with a working systemd user session and Hyprland.
 - Python 3.14 (tested baseline), MPV, usbmuxd, iproute2, and wl-clipboard.
 - A trusted iPhone with Developer Mode enabled.
-- A mounted developer image that provides the CoreDevice display and input services.
+- A developer image that provides the CoreDevice display and input services. A previously cached, matching image can be mounted automatically for a USB launch if none is mounted.
 - Tested phone: iPhone 13, iOS 27.0 build 24A437, developer image 27A5228h.
 - ARM64 Omarchy is the reference test host. Intel/x86-64 USB worked in a manual test, but Intel testing remains incomplete after repeated Wi-Fi playback failures. Intel support is not verified.
 
@@ -125,7 +125,7 @@ iphone-mirror status      # JSON status; no USB connection is opened
 iphone-mirror reload-ui   # Redraw toolbar without restarting capture
 ```
 
-The window shows connection status while it starts. If the connection fails or disconnects, the window stays open and shows **Retry Connection**. Click the button, or press Enter, to try again in the same window. Connection setup has a 30-second limit after the window opens; opening the window and cleanup can take longer. Retry closes the previous phone session before selecting the connection again.
+The window shows connection status while it starts. If the connection fails or disconnects, the window stays open and shows **Retry Connection**. Click the button, or press Enter, to try again in the same window. Connection setup has a 30-second limit after device selection and any image preparation. USB image preparation can take up to 90 seconds; opening the window and cleanup can take longer. Retry closes the previous phone session before selecting the connection again.
 
 Closing the viewer also stops the session. If you launch it again while the previous session is still closing, a temporary window shows **Closing previous connection...** until cleanup finishes. It then opens a new mirror window. Close the temporary window to cancel the launch. Existing window focus uses Hyprland. Logs are available with:
 
@@ -203,9 +203,9 @@ Tests use mocked device and connection services. The MPV integration test inject
 
 The application releases input, requests that the phone stop its media stream, and then closes the player, media transport, display connection, and tunnel. It cancels only its own tasks. The user service sends the initial stop signal only to the application, so the player is not killed before this cleanup.
 
-The prototype sometimes left the developer display service unresponsive after a restart. Remounting the same developer image restored it in testing. The new shutdown path addresses problems found in the old orchestration, but repeated real-phone restart testing is still required. A failure is reported instead of silently remounting or reconnecting forever.
+The prototype sometimes left the developer display service unresponsive after a restart. Remounting the same developer image restored it in testing. The new shutdown path addresses problems found in the old orchestration, but repeated real-phone restart testing is still required. A failure is reported instead of reconnecting forever.
 
-**Developer-image recovery is explicit.** This application never mounts, unmounts, replaces, or downloads developer images automatically. Confirm the phone and image before a manual recovery operation.
+**USB image preparation:** On USB startup only, if no developer image is mounted, the viewer attempts one mount of the pinned, locally cached personalized image. It shows **Preparing iPhone...** while mounting. It does not pair, download an image, unmount or replace an existing image, or mount over Wi-Fi. A ticket may be requested from Apple if the phone does not already have one. Unlock the phone for this operation. If the mount fails or times out, check its state before using Retry; do not assume it failed. An existing incompatible image still needs an explicit, manual recovery operation.
 
 ## Known limits
 
