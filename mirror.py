@@ -20,6 +20,7 @@ from usb_input import InputBridge
 
 log = logging.getLogger('iphone-mirror')
 CONNECT_TIMEOUT = 30
+IMAGE_PREP_TIMEOUT = 90
 
 class DirectPlayer:
     def __init__(self, vps=None, sps=None, pps=None, *, ipc_path, on_stop, on_ready,
@@ -315,7 +316,7 @@ class Mirror:
         finally:
             writer.close()
 
-    async def capture(self):
+    async def capture(self, selected=None):
         from connection import select_connection, get_tunnel
         from pymobiledevice3.remote.core_device.display_service import DisplayService
         from pymobiledevice3.remote.core_device.screen_stream import open_media_receiver
@@ -325,7 +326,7 @@ class Mirror:
         # Upstream serve() closes media transport early and cancels all loop tasks.
         # Our orchestration owns and cancels only the tasks it creates.
         self.stage = 'device-discovery'
-        mode, serial = await select_connection(self.connection,self.serial)
+        mode, serial = selected if selected is not None else await select_connection(self.connection,self.serial)
         self.runtime.update('starting', connection=mode, requested_connection=self.connection, serial=serial)
         self.stage = 'tunnel'
         async with get_tunnel(mode,serial) as rsd:
@@ -417,7 +418,25 @@ class Mirror:
         self.player = self.window
         self.runtime.update('starting', player_pid=self.window.player.pid)
         await self.window.status('Connecting to iPhone...')
-        capture = asyncio.create_task(self.capture())
+        from connection import select_connection
+        self.stage = 'device-discovery'
+        mode, serial = await asyncio.wait_for(select_connection(self.connection, self.serial), CONNECT_TIMEOUT)
+        if mode == 'usb':
+            from image_preparation import ensure_usb_image
+            self.stage = 'image-check'
+            async def show_preparing():
+                self.stage = 'image-mount'
+                await self.window.status('Preparing iPhone...')
+            preparation = asyncio.create_task(ensure_usb_image(serial, show_preparing))
+            done, _ = await asyncio.wait((preparation,), timeout=IMAGE_PREP_TIMEOUT)
+            if not done:
+                preparation.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await preparation  # Finish USB service cleanup before offering Retry.
+                raise TimeoutError('image-preparation-timeout')
+            await preparation
+            await self.window.status('Connecting to iPhone...')
+        capture = asyncio.create_task(self.capture((mode, serial)))
         ready = asyncio.create_task(self.connection_ready.wait())
         try:
             done, _ = await asyncio.wait(
