@@ -325,6 +325,31 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 runtime.close()
 
+    async def test_failure_near_startup_deadline_finishes_cleanup(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime=Runtime(Path(root)/'runtime').acquire()
+            app=Mirror(runtime)
+            window=Mock()
+            window.player.pid=123
+            window.status=AsyncMock()
+            cleaned=asyncio.Event()
+            async def failing_capture():
+                try:
+                    await asyncio.sleep(.005)
+                    raise ConnectionError()
+                finally:
+                    app.cleaning_up=True
+                    await asyncio.sleep(.08)
+                    cleaned.set()
+            app.capture=failing_capture
+            try:
+                with patch('mirror.DirectPlayer', return_value=window), patch('mirror.CONNECT_TIMEOUT', .05):
+                    with self.assertRaises(ConnectionError):
+                        await asyncio.wait_for(app.start_capture(), 1)
+                self.assertTrue(cleaned.is_set())
+            finally:
+                runtime.close()
+
     async def test_capture_start_and_stop_keep_tunnel_until_cleanup(self):
         events=[]
         with tempfile.TemporaryDirectory() as root:

@@ -19,9 +19,11 @@ class CliTests(unittest.TestCase):
     def completed(self, code=0, stdout="", stderr=""):
         return subprocess.CompletedProcess([], code, stdout, stderr)
 
+    @mock.patch('cli.pid_is_alive', return_value=True)
+    @mock.patch('cli._read_state', return_value={'state':'running','player_pid':123})
     @mock.patch("cli.send_command")
     @mock.patch("cli.subprocess.run")
-    def test_start_focuses_an_active_service(self, run, send_command):
+    def test_start_focuses_an_active_service(self, run, send_command, _state, _alive):
         run.side_effect = [self.completed(3), self.completed(0)]
 
         cli.start()
@@ -34,9 +36,10 @@ class CliTests(unittest.TestCase):
     @mock.patch('cli.time.sleep')
     @mock.patch('cli._systemctl')
     @mock.patch('cli.send_command')
+    @mock.patch('cli.pid_is_alive', return_value=False)
     @mock.patch('cli._read_state', return_value={'state':'stopping','player_pid':123})
     @mock.patch('cli.service_is_active')
-    def test_start_waits_for_closed_window_cleanup(self, active, _state, focus, systemctl, sleep):
+    def test_start_waits_for_closed_window_cleanup(self, active, _state, _alive, focus, systemctl, sleep):
         def is_active(service=cli.SERVICE):
             if service == cli.LEGACY_SERVICE:
                 return False
@@ -53,11 +56,12 @@ class CliTests(unittest.TestCase):
         systemctl.assert_called_once_with('start',cli.SERVICE)
 
     @mock.patch('cli.time.sleep')
+    @mock.patch('cli.pid_is_alive', return_value=False)
     @mock.patch('cli.time.monotonic', side_effect=(0, 61))
     @mock.patch('cli.send_command')
     @mock.patch('cli._read_state', return_value={'state':'stopping','player_pid':123})
     @mock.patch('cli.service_is_active')
-    def test_start_does_not_launch_second_service_during_stuck_cleanup(self, active, _state, focus, clock, sleep):
+    def test_start_does_not_launch_second_service_during_stuck_cleanup(self, active, _state, focus, clock, _alive, sleep):
         active.side_effect=lambda service=cli.SERVICE: service != cli.LEGACY_SERVICE
         with mock.patch('cli.closing_window') as closing:
             closing.return_value.__enter__.return_value.poll.return_value=None
@@ -81,6 +85,38 @@ class CliTests(unittest.TestCase):
         closing.assert_called_once_with()
         systemctl.assert_called_once_with('start',cli.SERVICE)
         sleep.assert_not_called()
+
+    @mock.patch('cli.send_command')
+    @mock.patch('cli.closing_window')
+    @mock.patch('cli.pid_is_alive', return_value=True)
+    @mock.patch('cli._read_state', return_value={'state':'stopping','player_pid':123})
+    @mock.patch('cli.service_is_active')
+    def test_start_focuses_live_window_during_cleanup(self, active, _state, _alive, closing, focus):
+        active.side_effect=lambda service=cli.SERVICE: service != cli.LEGACY_SERVICE
+        cli.start()
+        focus.assert_called_once_with('focus')
+        closing.assert_not_called()
+        self.write_request.assert_not_called()
+
+    @mock.patch('cli.time.sleep')
+    @mock.patch('cli._systemctl')
+    @mock.patch('cli.send_command')
+    @mock.patch('cli.closing_window')
+    @mock.patch('cli.pid_is_alive')
+    @mock.patch('cli._read_state')
+    @mock.patch('cli.service_is_active')
+    def test_start_focuses_retry_window_after_cleanup(self, active, state, alive, closing, focus, systemctl, sleep):
+        active.side_effect=lambda service=cli.SERVICE: service != cli.LEGACY_SERVICE
+        state.side_effect=[{'state':'stopping','player_pid':123},
+                           {'state':'disconnected','player_pid':456}]
+        alive.side_effect=[False, True]
+        closing.return_value.__enter__.return_value.poll.return_value=None
+        cli.start()
+        closing.assert_called_once_with()
+        focus.assert_called_once_with('focus')
+        systemctl.assert_not_called()
+        sleep.assert_not_called()
+        self.write_request.assert_not_called()
 
     @mock.patch('cli._systemctl')
     @mock.patch('cli._read_state', return_value={'state':'stopping'})

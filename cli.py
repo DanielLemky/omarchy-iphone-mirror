@@ -271,24 +271,34 @@ def start(connection=None, serial=None) -> None:
                 or (serial is not None and serial != state.get('serial'))):
             raise CliError('The mirror is running in another mode. Stop it before selecting a different mode.')
         player_pid = state.get('player_pid')
-        closing = (state.get('state') == 'stopping' or
-                   (isinstance(player_pid, int) and not isinstance(player_pid, bool)
-                    and not pid_is_alive(player_pid)))
+        has_player = isinstance(player_pid, int) and not isinstance(player_pid, bool)
+        player_alive = has_player and pid_is_alive(player_pid)
+        closing = (state.get('state') == 'stopping' or has_player) and not player_alive
         if not closing:
             send_command("focus")
             return
         # The window can close before USB/Wi-Fi cleanup finishes. Do not try
         # to focus that dead window or start a second service during teardown.
+        focus_existing = False
         with closing_window() as window:
             deadline = time.monotonic() + CLOSING_TIMEOUT
             while service_is_active():
                 if window.poll() is not None:
                     raise CliError('Launch cancelled')
+                current = _read_state() or {}
+                live_pid = current.get('player_pid')
+                if (isinstance(live_pid, int) and not isinstance(live_pid, bool)
+                        and pid_is_alive(live_pid)):
+                    focus_existing = True
+                    break
                 if time.monotonic() >= deadline:
                     raise CliError('The previous mirror session is still closing. Try again shortly.')
                 time.sleep(.1)
             if window.poll() is not None:
                 raise CliError('Launch cancelled')
+        if focus_existing:
+            send_command('focus')
+            return
     write_launch_request(connection or 'auto',serial)
     _systemctl("start", SERVICE)
 

@@ -424,11 +424,14 @@ class Mirror:
                 (capture, ready), timeout=CONNECT_TIMEOUT,
                 return_when=asyncio.FIRST_COMPLETED)
             if not done:
-                # Cancel connection setup once, then wait without a deadline so
-                # capture() can finish all owned cleanup in its finally block.
-                capture.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
+                # A failed capture may already be cleaning up at this deadline.
+                # Do not cancel that cleanup a second time.
+                if self.cleaning_up:
                     await capture
+                else:
+                    capture.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await capture
                 raise TimeoutError()
             if capture in done:
                 await capture
@@ -441,7 +444,8 @@ class Mirror:
             with contextlib.suppress(asyncio.CancelledError):
                 await ready
             if not capture.done():
-                capture.cancel()
+                if not self.cleaning_up:
+                    capture.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await capture
 
