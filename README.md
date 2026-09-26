@@ -9,7 +9,7 @@ An on-demand USB or Wi-Fi mirror application with an optional Omarchy bar plugin
 Run as your normal user in a terminal, not with `sudo`:
 
 ```sh
-curl -fsSL https://github.com/daniellemky/omarchy-iphone-mirror/releases/download/v0.1.1/install-online.sh | bash -s -- --release v0.1.1
+curl -fsSL https://github.com/daniellemky/omarchy-iphone-mirror/releases/download/v0.1.2/install-online.sh | bash -s -- --release v0.1.2
 ```
 
 This installs the **early alpha version specified above**, not development HEAD or a later release. The guide explains phone trust, Developer Mode, and Wi-Fi pairing. The viewer does not start automatically.
