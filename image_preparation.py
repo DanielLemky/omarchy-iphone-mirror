@@ -108,8 +108,16 @@ async def ensure_usb_image(serial, on_missing):
                 image, manifest, trust_cache = await asyncio.shield(worker)
             except asyncio.CancelledError:
                 stop.set()
+                # A second stop must not cancel the worker or remove its files.
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
                 with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await worker  # Never remove the snapshot while a worker still writes it.
+                    worker.result()
                 raise
             async with PersonalizedImageMounter(client) as service:
                 await service.mount(image, manifest, trust_cache)

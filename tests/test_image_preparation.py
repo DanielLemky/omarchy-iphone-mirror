@@ -148,6 +148,45 @@ class CachedImageTests(unittest.IsolatedAsyncioTestCase):
             mount.assert_not_called()
             client.close.assert_awaited_once()
 
+    async def test_two_stops_keep_snapshot_until_worker_exits(self):
+        with tempfile.TemporaryDirectory() as root:
+            client=Mock(close=AsyncMock())
+            check=AsyncMock()
+            check.__aenter__.return_value=check
+            check.copy_devices.return_value=[]
+            started=threading.Event()
+            release=threading.Event()
+            finished=threading.Event()
+            directories=[]
+            def blocked_copy(source, temporary, stop):
+                directories.append(temporary)
+                started.set()
+                release.wait(2)
+                finished.set()
+                return None
+            with patch.object(image, 'get_home_folder', return_value=Path(root)), \
+                 patch.object(image, 'create_using_usbmux', AsyncMock(return_value=client)), \
+                 patch.object(image, 'MobileImageMounterService', return_value=check), \
+                 patch.object(image, 'snapshot_verified_cache', side_effect=blocked_copy), \
+                 patch.object(image, 'PersonalizedImageMounter') as mount:
+                task=asyncio.create_task(image.ensure_usb_image('device', AsyncMock()))
+                try:
+                    self.assertTrue(await asyncio.to_thread(started.wait, 1))
+                    task.cancel()
+                    await asyncio.sleep(.02)
+                    task.cancel()
+                    await asyncio.sleep(.02)
+                    self.assertFalse(task.done())
+                    self.assertTrue(directories[0].exists())
+                finally:
+                    release.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, 2)
+            self.assertTrue(finished.is_set())
+            self.assertFalse(directories[0].exists())
+            mount.assert_not_called()
+            client.close.assert_awaited_once()
+
     async def test_no_cache_fails_without_mount(self):
         with tempfile.TemporaryDirectory() as root:
             client = Mock(close=AsyncMock())
