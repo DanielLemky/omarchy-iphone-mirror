@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import Any
 SERVICE = "iphone-mirror.service"
 LEGACY_SERVICE = "iphone-usb-mirror.service"
 STOP_TIMEOUT = 25.0
+CLOSING_TIMEOUT = 60.0
 
 
 class CliError(RuntimeError):
@@ -187,6 +189,77 @@ def write_launch_request(connection='auto',serial=None):
     finally:
         Path(path).unlink(missing_ok=True)
 
+@contextlib.contextmanager
+def closing_window():
+    """Temporary feedback while the previous viewer releases its phone session."""
+    root = runtime_dir()
+    try:
+        private = not root.is_symlink() and root.stat().st_uid == os.getuid()
+    except OSError:
+        private = False
+    if not private:
+        raise CliError('Runtime directory is not private')
+    with tempfile.TemporaryDirectory(prefix='.closing-', dir=root) as directory:
+        ipc = str(Path(directory) / 'mpv.sock')
+        try:
+            process = subprocess.Popen([
+                'mpv', '--no-config', '--idle=yes', '--force-window=immediate',
+                '--title=iPhone — Mirror', '--geometry=400x870', '--osc=no',
+                '--no-audio', '--no-terminal', '--input-default-bindings=no',
+                '--input-builtin-bindings=no', '--input-ipc-server='+ipc,
+            ], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as error:
+            raise CliError('Could not show the closing window') from error
+        try:
+            deadline = time.monotonic() + 5
+            while True:
+                if process.poll() is not None:
+                    raise CliError('Could not show the closing window')
+                try:
+                    client = socket.socket(socket.AF_UNIX)
+                    client.settimeout(1)
+                    client.connect(ipc)
+                    break
+                except (FileNotFoundError, ConnectionRefusedError):
+                    client.close()
+                    if time.monotonic() >= deadline:
+                        raise CliError('Could not show the closing window')
+                    time.sleep(.05)
+                except OSError as error:
+                    client.close()
+                    raise CliError('Could not show the closing window') from error
+            with client, client.makefile('rb') as replies:
+                commands = (
+                    ['define-section', 'closing-window', 'CLOSE_WIN quit', 'force'],
+                    ['enable-section', 'closing-window', 'exclusive'],
+                    ['osd-overlay', 62, 'ass-events',
+                     r'{\an5\pos(200,435)\fs18\bord1}Closing previous connection...', 400, 870],
+                )
+                try:
+                    for request_id, command in enumerate(commands, 1):
+                        client.sendall((json.dumps({'command': command, 'request_id': request_id})+'\n').encode())
+                        while True:
+                            line = replies.readline()
+                            if not line:
+                                raise CliError('Could not show the closing window')
+                            reply = json.loads(line)
+                            if reply.get('request_id') == request_id:
+                                if reply.get('error') != 'success':
+                                    raise CliError('Could not show the closing window')
+                                break
+                except (OSError, ValueError) as error:
+                    raise CliError('Could not show the closing window') from error
+                yield process
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+
+
 def start(connection=None, serial=None) -> None:
     if service_is_active(LEGACY_SERVICE):
         raise CliError(
@@ -197,8 +270,35 @@ def start(connection=None, serial=None) -> None:
         if ((connection is not None and connection not in ('auto',state.get('connection'),state.get('requested_connection')))
                 or (serial is not None and serial != state.get('serial'))):
             raise CliError('The mirror is running in another mode. Stop it before selecting a different mode.')
-        send_command("focus")
-        return
+        player_pid = state.get('player_pid')
+        has_player = isinstance(player_pid, int) and not isinstance(player_pid, bool)
+        player_alive = has_player and pid_is_alive(player_pid)
+        closing = (state.get('state') == 'stopping' or has_player) and not player_alive
+        if not closing:
+            send_command("focus")
+            return
+        # The window can close before USB/Wi-Fi cleanup finishes. Do not try
+        # to focus that dead window or start a second service during teardown.
+        focus_existing = False
+        with closing_window() as window:
+            deadline = time.monotonic() + CLOSING_TIMEOUT
+            while service_is_active():
+                if window.poll() is not None:
+                    raise CliError('Launch cancelled')
+                current = _read_state() or {}
+                live_pid = current.get('player_pid')
+                if (isinstance(live_pid, int) and not isinstance(live_pid, bool)
+                        and pid_is_alive(live_pid)):
+                    focus_existing = True
+                    break
+                if time.monotonic() >= deadline:
+                    raise CliError('The previous mirror session is still closing. Try again shortly.')
+                time.sleep(.1)
+            if window.poll() is not None:
+                raise CliError('Launch cancelled')
+        if focus_existing:
+            send_command('focus')
+            return
     write_launch_request(connection or 'auto',serial)
     _systemctl("start", SERVICE)
 
