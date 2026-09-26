@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from pathlib import Path
 import plistlib
 import tempfile
@@ -29,10 +30,14 @@ class CachedImageTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as root:
             directory = Path(root) / 'Xcode_iOS_DDI_Personalized'
             directory.mkdir()
-            for name in ('Image.dmg', 'Image.trustcache'):
-                (directory/name).write_bytes(b'cached')
+            (directory/'Image.dmg').write_bytes(b'cached image')
+            (directory/'Image.trustcache').write_bytes(b'cached trust cache')
             (directory/'BuildManifest.plist').write_bytes(plistlib.dumps({
-                'ProductBuildVersion': image.LATEST_DDI_BUILD_ID}))
+                'ProductBuildVersion': image.LATEST_DDI_BUILD_ID,
+                'BuildIdentities': [{'Manifest': {
+                    'PersonalizedDMG': {'Digest': hashlib.sha384(b'cached image').digest()},
+                    'LoadableTrustCache': {'Digest': hashlib.sha384(b'cached trust cache').digest()},
+                }}]}))
             client = Mock(close=AsyncMock())
             check = AsyncMock()
             check.__aenter__.return_value = check
@@ -50,6 +55,31 @@ class CachedImageTests(unittest.IsolatedAsyncioTestCase):
             mount.mount.assert_awaited_once_with(directory/'Image.dmg',
                 directory/'BuildManifest.plist', directory/'Image.trustcache')
             self.assertEqual(check.copy_devices.await_count, 2)
+            client.close.assert_awaited_once()
+
+    async def test_corrupt_cached_image_is_not_uploaded(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root) / 'Xcode_iOS_DDI_Personalized'
+            directory.mkdir()
+            (directory/'Image.dmg').write_bytes(b'corrupt image')
+            (directory/'Image.trustcache').write_bytes(b'cached trust cache')
+            (directory/'BuildManifest.plist').write_bytes(plistlib.dumps({
+                'ProductBuildVersion': image.LATEST_DDI_BUILD_ID,
+                'BuildIdentities': [{'Manifest': {
+                    'PersonalizedDMG': {'Digest': hashlib.sha384(b'expected image').digest()},
+                    'LoadableTrustCache': {'Digest': hashlib.sha384(b'cached trust cache').digest()},
+                }}]}))
+            client=Mock(close=AsyncMock())
+            check=AsyncMock()
+            check.__aenter__.return_value=check
+            check.copy_devices.return_value=[]
+            with patch.object(image, 'get_home_folder', return_value=Path(root)), \
+                 patch.object(image, 'create_using_usbmux', AsyncMock(return_value=client)), \
+                 patch.object(image, 'MobileImageMounterService', return_value=check), \
+                 patch.object(image, 'PersonalizedImageMounter') as mount:
+                with self.assertRaisesRegex(image.ImagePreparationError, 'cached-developer-image-invalid'):
+                    await image.ensure_usb_image('device', AsyncMock())
+            mount.assert_not_called()
             client.close.assert_awaited_once()
 
     async def test_no_cache_fails_without_mount(self):

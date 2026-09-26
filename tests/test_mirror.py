@@ -369,6 +369,64 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 runtime.close()
 
+    async def test_stop_during_image_preparation_finishes_cleanup(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime=Runtime(Path(root)/'runtime').acquire()
+            app=Mirror(runtime)
+            window=Mock()
+            window.player.pid=123
+            window.status=AsyncMock()
+            app.capture=AsyncMock()
+            started=asyncio.Event()
+            cleaned=asyncio.Event()
+            async def prepare(serial, on_missing):
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    await asyncio.sleep(.02)
+                    cleaned.set()
+            try:
+                with patch('mirror.DirectPlayer', return_value=window), \
+                     patch('connection.select_connection', AsyncMock(return_value=('usb', 'device'))), \
+                     patch('image_preparation.ensure_usb_image', side_effect=prepare):
+                    task=asyncio.create_task(app.run_attempt())
+                    await asyncio.wait_for(started.wait(), 1)
+                    app.stop()
+                    await asyncio.wait_for(task, 1)
+                self.assertTrue(cleaned.is_set())
+                app.capture.assert_not_awaited()
+            finally:
+                runtime.close()
+
+    async def test_image_errors_show_specific_guidance(self):
+        from image_preparation import ImagePreparationError
+        for code, expected in (
+            ('cached-developer-image-missing', 'Cached developer image is missing'),
+            ('cached-developer-image-invalid', 'Cached developer image is invalid'),
+            ('cached-developer-image-build-mismatch', 'wrong build'),
+            ('developer-image-mount-unverified', 'mount could not be verified'),
+        ):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as root:
+                runtime=Runtime(Path(root)/'runtime').acquire()
+                app=Mirror(runtime)
+                window=Mock()
+                window.player.poll.return_value=None
+                window.status=AsyncMock()
+                window.wait_retry=AsyncMock(return_value=False)
+                app.window=window
+                async def fail():
+                    app.stage='image-check'
+                    raise ImagePreparationError(code)
+                app.start_capture=fail
+                try:
+                    await asyncio.wait_for(app.run(), 1)
+                    self.assertIn(expected, runtime.state['error'])
+                    self.assertIn(expected, window.status.await_args.args[0])
+                    window.close.assert_called_once()
+                finally:
+                    runtime.close()
+
     async def test_connection_startup_timeout_waits_for_cleanup(self):
         with tempfile.TemporaryDirectory() as root:
             runtime=Runtime(Path(root)/'runtime').acquire()

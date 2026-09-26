@@ -21,6 +21,12 @@ from usb_input import InputBridge
 log = logging.getLogger('iphone-mirror')
 CONNECT_TIMEOUT = 30
 IMAGE_PREP_TIMEOUT = 90
+IMAGE_FAILURE_MESSAGES = {
+    'cached-developer-image-missing': 'Cached developer image is missing. Set up the phone before retrying.',
+    'cached-developer-image-invalid': 'Cached developer image is invalid. Replace the local cache before retrying.',
+    'cached-developer-image-build-mismatch': 'Cached developer image has the wrong build. Replace the local cache before retrying.',
+    'developer-image-mount-unverified': 'Developer image mount could not be verified. Check the phone before retrying.',
+}
 
 class DirectPlayer:
     def __init__(self, vps=None, sps=None, pps=None, *, ipc_path, on_stop, on_ready,
@@ -428,13 +434,16 @@ class Mirror:
                 self.stage = 'image-mount'
                 await self.window.status('Preparing iPhone...')
             preparation = asyncio.create_task(ensure_usb_image(serial, show_preparing))
-            done, _ = await asyncio.wait((preparation,), timeout=IMAGE_PREP_TIMEOUT)
-            if not done:
-                preparation.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await preparation  # Finish USB service cleanup before offering Retry.
-                raise TimeoutError('image-preparation-timeout')
-            await preparation
+            try:
+                done, _ = await asyncio.wait((preparation,), timeout=IMAGE_PREP_TIMEOUT)
+                if not done:
+                    raise TimeoutError('image-preparation-timeout')
+                await preparation
+            finally:
+                if not preparation.done():
+                    preparation.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await preparation  # Release USB resources before stopping or Retry.
             await self.window.status('Connecting to iPhone...')
         capture = asyncio.create_task(self.capture((mode, serial)))
         ready = asyncio.create_task(self.connection_ready.wait())
@@ -478,11 +487,14 @@ class Mirror:
                 if (self.shutdown_event.is_set() or not self.error or self.window is None
                         or self.window.player.poll() is not None):
                     break
-                message = ('Disconnected from iPhone.' if self.connected else 'Cannot connect to iPhone.')
+                image_failure = self.stage in ('image-check', 'image-mount')
+                message = (self.error if image_failure else
+                           ('Disconnected from iPhone.' if self.connected else 'Cannot connect to iPhone.')
+                           + '\nCheck the connection.\nUnlock your iPhone.')
                 self.runtime.update('disconnected' if self.connected else 'error', error=self.error)
                 try:
                     self.stop_event.clear()
-                    await self.window.status(message + '\nCheck the connection.\nUnlock your iPhone.', ended=True)
+                    await self.window.status(message, ended=True)
                     if (self.shutdown_event.is_set()
                             or not await self.window.wait_retry(self.shutdown_event)
                             or self.shutdown_event.is_set()):
@@ -519,7 +531,15 @@ class Mirror:
             if capture in done:
                 await capture
         except Exception as error:
-            self.error = self.error or 'Connection failed ('+type(error).__name__+'). Check the connection, pairing, Developer Mode and developer image.'
+            if self.stage in ('image-check', 'image-mount'):
+                from image_preparation import ImagePreparationError
+                if isinstance(error, ImagePreparationError):
+                    message = IMAGE_FAILURE_MESSAGES.get(str(error), 'Developer image could not be prepared. Check the phone before retrying.')
+                else:
+                    message = 'Developer image could not be prepared. Unlock the phone and check USB before retrying.'
+            else:
+                message = 'Connection failed ('+type(error).__name__+'). Check the connection, pairing, Developer Mode and developer image.'
+            self.error = self.error or message
             log.error('Capture failed during %s (%s)', self.stage, type(error).__name__)
         finally:
             # Do not interrupt cleanup once it has started.
