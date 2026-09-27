@@ -17,6 +17,8 @@ PY="${XDG_DATA_HOME:-$HOME/.local/share}/iphone-mirror/venv/bin/python"
 
 This checks USB discovery; it does not establish that the display service works. The output can contain device identifiers. Do not paste it into a public issue without removing them.
 
+If Linux detects the iPhone but this command does not list it, check whether Personal Hotspot is on. On some Linux hosts, USB tethering through `ipheth` can interfere with usbmuxd discovery. Turn Personal Hotspot off on the phone, reconnect the USB cable, and run the check again. Do not disable the driver: that would also disable USB tethering.
+
 USB trust saves pairing credentials through usbmuxd. On Linux those files are usually `/var/lib/lockdown/*.plist`. They contain host keys. Do not copy them or attach them to a public issue. Uninstalling this application does not delete them.
 
 ## 2. Enable Developer Mode
