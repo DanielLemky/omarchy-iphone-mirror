@@ -405,10 +405,21 @@ class AudioSession:
             log.warning('Audio stop notification failed (%s)', type(error).__name__)
 
     def start(self):
+        recv = asyncio.create_task(self._recv(), name='iphone-mirror-audio-recv')
+        recv.add_done_callback(self._recv_done)
         self._tasks = [
-            asyncio.create_task(self._recv(), name='iphone-mirror-audio-recv'),
+            recv,
             asyncio.create_task(self._rtcp(), name='iphone-mirror-audio-rtcp'),
         ]
+
+    def _recv_done(self, task):
+        # Retrieve the outcome so a failed task is not reported later.
+        # close() sets _closed before cancelling, and _recv turns that
+        # cancellation into a normal return, so the flag is the shutdown signal.
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            task.result()
+        if not self._closed:
+            self._forward_stopped()
 
     async def _recv(self):
         errors = 0

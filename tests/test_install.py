@@ -189,6 +189,41 @@ esac
         self.assertIn("recovery: systemctl --user daemon-reload", failed.stderr)
         self.assertTrue(all(self.owned()[key].exists() for key in ('app','launcher','unit','usb')))
 
+    def test_missing_libfdk_aac_warns_and_still_installs(self):
+        result = self.run_script(env=self.env | {"AUDIO_LIB_MISSING": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("libfdk-aac is not installed", result.stderr)
+        self.assertIn("omarchy pkg add libfdk-aac", result.stderr)
+        self.assertIn("Computer checks passed.", result.stdout)
+        self.assertTrue(self.owned()["app"].exists())
+
+    def test_optional_audio_warning_follows_the_library(self):
+        spec = importlib.util.spec_from_file_location(
+            "install_support_audio", ROOT / "packaging/install_support.py")
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        env = {key: value for key, value in os.environ.items() if key != "AUDIO_LIB_MISSING"}
+        output = io.StringIO()
+        with patch.dict(os.environ, env, clear=True), \
+             patch.object(helper.ctypes, "CDLL", return_value=object()), \
+             contextlib.redirect_stderr(output):
+            helper.warn_optional_audio()
+        self.assertEqual(output.getvalue(), "")
+        output = io.StringIO()
+        with patch.dict(os.environ, env, clear=True), \
+             patch.object(helper.ctypes, "CDLL", side_effect=OSError("missing")), \
+             contextlib.redirect_stderr(output):
+            helper.warn_optional_audio()
+        self.assertIn("libfdk-aac is not installed", output.getvalue())
+        self.assertIn("omarchy pkg add libfdk-aac", output.getvalue())
+        output = io.StringIO()
+        with patch.dict(os.environ, env | {"AUDIO_LIB_MISSING": "1"}, clear=True), \
+             patch.object(helper.ctypes, "CDLL", return_value=object()) as loaded, \
+             contextlib.redirect_stderr(output):
+            helper.warn_optional_audio()
+        loaded.assert_not_called()
+        self.assertIn("omarchy pkg add libfdk-aac", output.getvalue())
+
     def test_missing_commands_and_venv_are_actionable(self):
         packages = {"python3": "python", "wl-paste": "wl-clipboard", "mpv": "mpv", "usbmuxd": "usbmuxd", "ip": "iproute2", "systemctl": "systemd", "hyprctl": "hyprland"}
         for command, package in packages.items():

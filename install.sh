@@ -96,6 +96,7 @@ for service in iphone-mirror.service iphone-usb-mirror.service; do
   fi
 done
 python3 "$helper" check-lock
+python3 "$helper" audio-deps
 
 printf '%s\n' 'Computer checks passed.'
 printf '%s\n' 'Required tools, Python environment, installation paths, and user service manager are ready.'

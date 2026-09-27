@@ -265,6 +265,35 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         transport.close.assert_called_once()
         service.close.assert_awaited()
 
+    async def test_receive_socket_failure_notifies_once(self):
+        calls = []
+        transport = Mock(recv=AsyncMock(side_effect=OSError('socket')),
+                         sendto=AsyncMock(), close=Mock())
+        player = Mock(close=Mock())
+        service = Mock(close=AsyncMock())
+        session = AudioSession(service, transport, player, decoder=Mock(),
+                               local_ssrc=1, remote_ssrc=2, rtcp_dest=('::1', 9))
+        session.on_stopped = lambda: calls.append('stopped')
+        session.start()
+        await asyncio.wait_for(session._tasks[0], 1)
+        self.assertEqual(calls, ['stopped'])
+        await session.close()
+        self.assertEqual(calls, ['stopped'])
+
+    async def test_close_does_not_report_receive_stop(self):
+        calls = []
+        transport = Mock(recv=AsyncMock(side_effect=asyncio.Event().wait),
+                         sendto=AsyncMock(), close=Mock())
+        player = Mock(close=Mock())
+        service = Mock(close=AsyncMock())
+        session = AudioSession(service, transport, player, decoder=Mock(),
+                               local_ssrc=1, remote_ssrc=2, rtcp_dest=('::1', 9))
+        session.on_stopped = lambda: calls.append('stopped')
+        session.start()
+        await asyncio.sleep(0)
+        await session.close()
+        self.assertEqual(calls, [])
+
     async def test_startup_failure_does_not_raise(self):
         from audio import start_system_audio
         with patch('audio.Eld480Decoder', side_effect=RuntimeError('no decoder')):
