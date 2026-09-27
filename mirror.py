@@ -120,15 +120,47 @@ class Mirror:
         self.cleaning_up = False
         self.loop = asyncio.get_running_loop()
         self._audio = None
+        self._audio_available = False
+        self._redraw_audio = False
 
-    def _on_audio_toggle(self, muted):
+    def _audio_output_stopped(self):
+        try:
+            self.loop.call_soon_threadsafe(self._mark_audio_unavailable)
+        except RuntimeError:
+            pass
+
+    def _mark_audio_unavailable(self):
+        if self.cleaning_up or not self._audio_available:
+            return
+        self._audio_available = False
         if self._audio is not None:
-            self._audio.set_muted(muted)
-        extra = {'audio_muted': bool(muted)}
+            self._audio.set_muted(True)
+        bridge = self.bridge
+        if bridge is not None:
+            bridge.audio_available = False
+            bridge.audio_muted = True
+            self._redraw_audio = True
+        self._publish_audio_status(muted=True)
+
+    def _publish_audio_status(self, muted=None):
+        state = self.runtime.state.get('state') or 'running'
+        if state in ('stopping', 'stopped'):
+            return
+        if muted is None:
+            muted = True if not self._audio_available else (
+                self.bridge.audio_muted if self.bridge is not None else True)
+        extra = {'audio_muted': bool(muted), 'audio_available': bool(self._audio_available)}
         if self.player is not None and self.player.player.poll() is None:
             extra['player_pid'] = self.player.player.pid
-        state = self.runtime.state.get('state') or 'running'
-        self.runtime.update(state, error=self.runtime.state.get('error'), **extra)
+        error = self.bridge.error if self.bridge is not None else self.runtime.state.get('error')
+        self.runtime.update(state, error=error, **extra)
+
+    def _on_audio_toggle(self, muted):
+        if not self._audio_available:
+            muted = True
+        if self._audio is not None:
+            self._audio.set_muted(muted)
+        self._publish_audio_status(muted=muted)
 
     def stop(self, error=None):
         if error and self.error is None and not self.stop_event.is_set() and not self.cleaning_up:
@@ -223,17 +255,30 @@ class Mirror:
                          asyncio.create_task(receiver._rtcp_send_loop(transport))]
                 audio = await start_system_audio(rsd, self.session_id)
                 self._audio = audio
+                self._audio_available = audio is not None and audio.output_alive()
+                if audio is not None:
+                    audio.on_stopped = self._audio_output_stopped
                 await asyncio.wait_for(self.player_ready.wait(), 15)
                 self.bridge = InputBridge(rsd, str(self.runtime.root/'mpv.sock'))
                 self.bridge.on_audio_toggle = self._on_audio_toggle
+                self.bridge.audio_available = self._audio_available
+                self.bridge.audio_muted = True
                 input_task = asyncio.create_task(self.bridge.run())
                 await asyncio.wait_for(self.bridge.ready.wait(), 12)
-                self.runtime.update('running', player_pid=self.player.player.pid, audio_muted=True)
+                self.runtime.update('running', player_pid=self.player.player.pid,
+                                    audio_muted=True, audio_available=self._audio_available)
                 while not self.stop_event.is_set():
+                    if self._audio_available and self._audio is not None and not self._audio.output_alive():
+                        self._mark_audio_unavailable()
+                    if self._redraw_audio and getattr(self.bridge, 'writer', None) is not None:
+                        self._redraw_audio = False
+                        with contextlib.suppress(Exception):
+                            await self.bridge.draw_toolbar()
                     if self.runtime.state.get('error') != self.bridge.error:
                         self.runtime.update('running', error=self.bridge.error,
                                             player_pid=self.player.player.pid,
-                                            audio_muted=self.bridge.audio_muted)
+                                            audio_muted=True if not self.bridge.audio_available else self.bridge.audio_muted,
+                                            audio_available=bool(self.bridge.audio_available))
                     if input_task.done():
                         # Error type only: never exception messages, locals or keys.
                         if not input_task.cancelled() and input_task.exception():

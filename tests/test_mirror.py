@@ -98,5 +98,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     runtime.close()
             self.assertEqual(events,['tunnel-open','input-close','device-stop','player-close','transport-close','display-close','tunnel-close'])
             self.assertIsNone(app.error)
+            self.assertFalse(runtime.state['audio_available'])
+            self.assertTrue(runtime.state['audio_muted'])
 
 if __name__=='__main__':unittest.main()

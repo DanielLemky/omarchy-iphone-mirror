@@ -128,6 +128,7 @@ class InputBridge:
         self.scroll_pending = 0.0
         self.paste_cancel_until = 0.0
         self.audio_muted = True
+        self.audio_available = True
         self.on_audio_toggle = None
 
     async def scroll_wheel(self):
@@ -187,9 +188,20 @@ class InputBridge:
         audio_x = w - size - pad
         if audio_x < search_x + size:
             audio_x = search_x + size + pad
-        speaker = (rf'{{\an7\pos({audio_x},{y})\bord0\shad0\1c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
+        # Unavailable is a gray speaker with an X. Muted is a white speaker
+        # with one slash. Unmuted adds waves. An X is not the mute glyph, so
+        # a dead player is not drawn as if it were playing.
+        if not self.audio_available:
+            speaker_color = r'&H808080&'
+        else:
+            speaker_color = r'&HFFFFFF&'
+        speaker = (rf'{{\an7\pos({audio_x},{y})\bord0\shad0\1c{speaker_color}\fscx{scale*100}\fscy{scale*100}\p1}}'
                    'm 2 9 l 8 9 14 4 14 20 8 15 2 15')
-        if self.audio_muted:
+        if not self.audio_available:
+            mark = (rf'{{\an7\pos({audio_x},{y})\bord2\shad0\1a&HFF&\3c&H808080&\fscx{scale*100}\fscy{scale*100}\p1}}'
+                    'm 4 4 l 20 20 m 20 4 l 4 20')
+            audio_events = [speaker, mark]
+        elif self.audio_muted:
             slash = (rf'{{\an7\pos({audio_x},{y})\bord2\shad0\1a&HFF&\3c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
                      'm 4 4 l 20 20')
             audio_events = [speaker, slash]
@@ -236,6 +248,11 @@ class InputBridge:
     async def audio_button(self):
         """Toggle computer playback. Does not change the phone volume."""
         try:
+            if not self.audio_available:
+                self.audio_muted = True
+                await self.draw_toolbar()
+                await self.command('show-text', 'Audio is not available.', 2000)
+                return
             self.audio_muted = not self.audio_muted
             if self.on_audio_toggle is not None:
                 self.on_audio_toggle(self.audio_muted)

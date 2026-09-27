@@ -29,7 +29,7 @@ The application owns video, input, and connection management. The plugin calls t
 - Direct HEVC playback in MPV with low-latency settings and a local cursor.
 - Plays the phone's speaker mix over a second CoreDevice RTP stream (AAC-ELD 48 kHz, 10 ms). Video continues if audio cannot start.
 - Taps, drags, vertical wheel scrolling, and focused-window keyboard input over USB or Wi-Fi.
-- Centered Home and Spotlight buttons, with a speaker toggle on the right. Computer playback starts muted; the speaker toggle unmutes host audio without changing the phone volume. Home uses a hardware-button event; Spotlight uses Command+Space. Neither uses a swipe.
+- Centered Home and Spotlight buttons, with a speaker toggle on the right. Computer playback starts muted; the speaker toggle unmutes host audio without changing the phone volume. If audio cannot start or playback stops, the speaker shows that audio is unavailable. Home uses a hardware-button event; Spotlight uses Command+Space. Neither uses a swipe.
 - Input release on focus loss and shutdown. No toggle shortcut is required.
 - One application instance, private runtime files, and structured status.
 - Manual start only: no startup at login or when a USB cable is connected.
@@ -212,7 +212,7 @@ The prototype sometimes left the developer display service unresponsive after a 
 - Lower video latency is confirmed by user testing of the prototype, but it has not been measured end to end.
 - International keyboard layouts, IME, multitouch, and horizontal wheel scrolling are not complete.
 - An input-service failure disables input but leaves video running. A fresh click attempts reconnection without replaying the click or failed keys.
-- Audio is the phone's system output only (stereo AAC-ELD; some sessions mix to identical L/R). There is no microphone capture and no audio sent to the phone. Computer playback starts muted. Audio start or decode failure leaves video running. Lower the phone volume or use headphones if the phone speaker is too loud; the app does not mute the phone.
+- Audio is the phone's system output only (stereo AAC-ELD; some sessions mix to identical L/R). There is no microphone capture and no audio sent to the phone. Computer playback starts muted. Mute silences audio already queued for playback. Audio start or decode failure leaves video running, and the speaker control shows that playback is unavailable. Lower the phone volume or use headphones if the phone speaker is too loud; the app does not mute the phone.
 - The pinned pymobiledevice3 RTP receiver is reused internally. The application does not start a VNC TCP server. It opens the media transport needed to receive the phone stream; this is not a claim that the application opens no network sockets.
 - The complete locked-phone USB unlock flow still needs controlled validation. Passcodes must remain user-entered and must never be logged.
 

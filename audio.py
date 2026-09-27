@@ -271,14 +271,27 @@ def _pcm_player_command():
             '--load-scripts=no', '--audio-client-name=iphone-mirror', '-']
 
 
+def output_pcm(pcm, *, muted: bool) -> bytes:
+    """Return same-sized silence when muted.
+
+    Applied at the write, so PCM queued before the mute click does not play.
+    The length stays the same so PipeWire's clock does not underrun.
+    """
+    if muted:
+        return bytes(len(pcm))
+    return bytes(pcm)
+
+
 class PcmPlayer:
     """Feed live s16le PCM to PipeWire. Drop packets on backlog."""
 
-    def __init__(self):
+    def __init__(self, on_stopped=None):
         self._inq = queue.Queue(maxsize=50)
         self._stop = threading.Event()
         self._dropped = 0
+        self._notified = False
         self.muted = True
+        self.on_stopped = on_stopped
         self.player = subprocess.Popen(
             _pcm_player_command(),
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
@@ -291,13 +304,23 @@ class PcmPlayer:
         if not pcm or self._stop.is_set():
             return
         # Keep PipeWire clocked while muted. Stopping writes causes xruns
-        # that keep clicking after unmute.
+        # that keep clicking after unmute. The write path silences again so
+        # audio already sitting in the queue is not played after mute.
         if self.muted:
             pcm = bytes(len(pcm))
         try:
             self._inq.put_nowait(pcm)
         except queue.Full:
             self._dropped += 1
+
+    def _write_buffer(self, data: bytes):
+        remaining = memoryview(data)
+        while remaining and not self._stop.is_set():
+            chunk = output_pcm(remaining, muted=self.muted)
+            written = self.player.stdin.write(chunk)
+            if not written:
+                raise BrokenPipeError()
+            remaining = remaining[written:]
 
     def _write(self):
         try:
@@ -308,14 +331,24 @@ class PcmPlayer:
                     if self.player.poll() is not None:
                         return
                     continue
-                remaining = memoryview(data)
-                while remaining and not self._stop.is_set():
-                    written = self.player.stdin.write(remaining)
-                    if not written:
-                        raise BrokenPipeError()
-                    remaining = remaining[written:]
+                self._write_buffer(data)
         except (BrokenPipeError, OSError):
             return
+        finally:
+            if not self._stop.is_set():
+                self._notify_stopped()
+
+    def _notify_stopped(self):
+        if self._stop.is_set() or self._notified:
+            return
+        self._notified = True
+        callback = self.on_stopped
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception as error:
+            log.warning('Audio stop notification failed (%s)', type(error).__name__)
 
     def close(self):
         self._stop.set()
@@ -346,10 +379,30 @@ class AudioSession:
         self._closed = False
         self._tasks = []
         self._decode_warned = False
+        self.on_stopped = None
 
     def set_muted(self, muted):
         if self._player is not None:
             self._player.muted = bool(muted)
+
+    def output_alive(self) -> bool:
+        player = self._player
+        if player is None:
+            return False
+        process = getattr(player, 'player', None)
+        thread = getattr(player, '_thread', None)
+        if process is None or thread is None or not thread.is_alive():
+            return False
+        return process.poll() is None
+
+    def _forward_stopped(self):
+        callback = self.on_stopped
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception as error:
+            log.warning('Audio stop notification failed (%s)', type(error).__name__)
 
     def start(self):
         self._tasks = [
@@ -445,6 +498,26 @@ class AudioSession:
             self._decoder = None
 
 
+async def _abort_audio_startup(player, service, transport, decoder):
+    """Close resources created before a session is returned.
+
+    Synchronous closes run before the service await so cancellation cannot
+    skip the player, socket, or decoder.
+    """
+    if player is not None:
+        with contextlib.suppress(Exception):
+            player.close()
+    if transport is not None:
+        with contextlib.suppress(Exception):
+            transport.close()
+    if decoder is not None:
+        with contextlib.suppress(Exception):
+            decoder.close()
+    if service is not None:
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(service.close(), 2)
+
+
 async def start_system_audio(rsd, session_id):
     """Start the CoreDevice system-audio stream. Returns a session or None."""
     from pymobiledevice3.remote.core_device.display_service import DisplayService
@@ -454,9 +527,19 @@ async def start_system_audio(rsd, session_id):
     transport = None
     player = None
     decoder = None
+    handed_off = False
+    # The player thread can exit during the awaits below, before the session
+    # exists. Hold the forwarder here and attach it once the session does.
+    forward = [None]
+
+    def _player_stopped():
+        callback = forward[0]
+        if callback is not None:
+            callback()
+
     try:
         decoder = Eld480Decoder()
-        player = PcmPlayer()
+        player = PcmPlayer(on_stopped=_player_stopped)
         service = await connect_service(lambda: DisplayService(rsd))
         transport, receiver_ip = open_media_receiver(service, (4 * 1024 * 1024, 1 * 1024 * 1024))
         answer = await asyncio.wait_for(service.start_audio_stream(
@@ -474,20 +557,22 @@ async def start_system_audio(rsd, session_id):
             service=service, transport=transport, player=player, decoder=decoder,
             local_ssrc=local_ssrc, remote_ssrc=remote_ssrc, rtcp_dest=rtcp_dest,
         )
+        forward[0] = session._forward_stopped
         session.start()
+        handed_off = True
         return session
+    except asyncio.CancelledError:
+        if not handed_off:
+            task = asyncio.current_task()
+            if task is not None:
+                while task.cancelling():
+                    task.uncancel()
+            try:
+                await _abort_audio_startup(player, service, transport, decoder)
+            finally:
+                raise
+        raise
     except Exception as error:
         log.error('Audio startup failed (%s)', type(error).__name__)
-        if decoder is not None:
-            with contextlib.suppress(Exception):
-                decoder.close()
-        if player is not None:
-            with contextlib.suppress(Exception):
-                player.close()
-        if transport is not None:
-            with contextlib.suppress(Exception):
-                transport.close()
-        if service is not None:
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(service.close(), 2)
+        await _abort_audio_startup(player, service, transport, decoder)
         return None

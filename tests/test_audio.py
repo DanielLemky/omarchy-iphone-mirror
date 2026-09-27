@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from audio import (
     AudioSession, build_rtcp_rr, decode_coredevice_frame, extend_seq,
-    prepare_opus_packet, rtp_payload, unwrap_coredevice_au,
+    output_pcm, prepare_opus_packet, rtp_payload, unwrap_coredevice_au,
 )
 
 FIXTURE_1KHZ = Path(__file__).resolve().parent / 'fixtures' / 'coredevice-1khz.au'
@@ -104,14 +104,29 @@ class DecoderTests(unittest.TestCase):
         self.assertIn('--media-role', command)
         self.assertEqual(command[command.index('--media-role') + 1], 'Music')
 
+    def test_output_pcm_keeps_length(self):
+        pcm = b'\x11\x22' * 8
+        self.assertEqual(output_pcm(pcm, muted=True), b'\x00' * 16)
+        self.assertEqual(output_pcm(pcm, muted=False), pcm)
+        self.assertEqual(output_pcm(b'', muted=True), b'')
+
+    def _stopped_player(self):
+        from audio import PcmPlayer
+        player = PcmPlayer()
+        player._stop.set()
+        player._thread.join(timeout=1)
+        player._stop.clear()
+        return player
+
     def test_muted_player_writes_silence(self):
         from audio import PcmPlayer
         with patch('audio.subprocess.Popen') as popen:
             proc = Mock()
             proc.poll.return_value = None
             proc.stdin = Mock()
+            proc.stdin.write.return_value = 1
             popen.return_value = proc
-            player = PcmPlayer()
+            player = self._stopped_player()
             try:
                 self.assertTrue(player.muted)
                 player.play(b'\x00\x01' * 10)
@@ -120,7 +135,91 @@ class DecoderTests(unittest.TestCase):
                 player.play(b'\x00\x01' * 10)
                 self.assertEqual(player._inq.get_nowait(), b'\x00\x01' * 10)
             finally:
+                player._stop.set()
                 player.close()
+
+    def test_mute_silences_pcm_already_queued(self):
+        from audio import PcmPlayer
+        written = []
+        with patch('audio.subprocess.Popen') as popen:
+            proc = Mock()
+            proc.poll.return_value = None
+            proc.stdin = Mock()
+            proc.stdin.write.side_effect = lambda data: written.append(bytes(data)) or len(data)
+            popen.return_value = proc
+            player = self._stopped_player()
+            try:
+                player.muted = False
+                player.play(b'\x11\x22' * 8)
+                queued = player._inq.get_nowait()
+                self.assertEqual(queued, b'\x11\x22' * 8)
+                player.muted = True
+                player._write_buffer(queued)
+                self.assertEqual(written, [b'\x00' * 16])
+            finally:
+                player._stop.set()
+                player.close()
+
+    def test_mute_during_partial_write_silences_the_rest(self):
+        from audio import PcmPlayer
+        written = []
+        with patch('audio.subprocess.Popen') as popen:
+            proc = Mock()
+            proc.poll.return_value = None
+            proc.stdin = Mock()
+            popen.return_value = proc
+            player = self._stopped_player()
+
+            def write(data):
+                written.append(bytes(data))
+                if len(written) == 1:
+                    player.muted = True
+                    return 2
+                return len(data)
+
+            proc.stdin.write.side_effect = write
+            try:
+                player.muted = False
+                player._write_buffer(b'\x11\x22\x33\x44\x55\x66')
+                self.assertEqual(written, [b'\x11\x22\x33\x44\x55\x66', b'\x00\x00\x00\x00'])
+            finally:
+                player._stop.set()
+                player.close()
+
+    def test_close_does_not_report_a_stop(self):
+        import time
+        from audio import PcmPlayer
+        calls = []
+        with patch('audio.subprocess.Popen') as popen:
+            proc = Mock()
+            proc.poll.return_value = None
+            proc.stdin = Mock()
+            proc.stdin.write.return_value = 1
+            popen.return_value = proc
+            player = PcmPlayer(on_stopped=lambda: calls.append('stopped'))
+            player.close()
+            time.sleep(0.05)
+            self.assertEqual(calls, [])
+
+    def test_player_exit_notifies_once(self):
+        import time
+        from audio import PcmPlayer
+        calls = []
+        with patch('audio.subprocess.Popen') as popen:
+            proc = Mock()
+            proc.poll.return_value = 1
+            proc.stdin = Mock()
+            proc.stdin.write.return_value = 1
+            popen.return_value = proc
+            player = PcmPlayer(on_stopped=lambda: calls.append('stopped'))
+            try:
+                deadline = time.time() + 2
+                while not calls and time.time() < deadline:
+                    time.sleep(0.02)
+                self.assertEqual(calls, ['stopped'])
+            finally:
+                player.close()
+            self.assertEqual(calls, ['stopped'])
 
     def test_unwrap_is_identity_for_coredevice_payload(self):
         payload = FIXTURE_1KHZ.read_bytes()
@@ -170,6 +269,79 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         from audio import start_system_audio
         with patch('audio.Eld480Decoder', side_effect=RuntimeError('no decoder')):
             self.assertIsNone(await start_system_audio(Mock(), 'sid'))
+
+    async def test_startup_failure_closes_partial_resources(self):
+        from audio import start_system_audio
+        decoder = Mock()
+        player = Mock()
+        with patch('audio.Eld480Decoder', return_value=decoder), \
+             patch('audio.PcmPlayer', return_value=player), \
+             patch('audio.connect_service', AsyncMock(side_effect=RuntimeError('nope'))):
+            self.assertIsNone(await start_system_audio(Mock(), 'sid'))
+        player.close.assert_called_once()
+        decoder.close.assert_called_once()
+
+    async def test_startup_cancellation_cleans_up_and_reraises(self):
+        from audio import start_system_audio
+        decoder = Mock()
+        player = Mock()
+        transport = Mock(port=9, close=Mock())
+        service = Mock(close=AsyncMock())
+        started = asyncio.Event()
+
+        async def hang(**kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        service.start_audio_stream = hang
+        rsd = Mock()
+        rsd.service.address = ('10.0.0.2', 1)
+        with patch('audio.Eld480Decoder', return_value=decoder), \
+             patch('audio.PcmPlayer', return_value=player), \
+             patch('audio.connect_service', AsyncMock(return_value=service)), \
+             patch('pymobiledevice3.remote.core_device.screen_stream.open_media_receiver',
+                   return_value=(transport, '10.0.0.1')):
+            task = asyncio.create_task(start_system_audio(rsd, 'sid'))
+            await asyncio.wait_for(started.wait(), 1)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        player.close.assert_called_once()
+        transport.close.assert_called_once()
+        decoder.close.assert_called_once()
+        service.close.assert_awaited()
+
+
+class MirrorAudioStatusTests(unittest.IsolatedAsyncioTestCase):
+    async def test_player_stop_marks_speaker_unavailable(self):
+        import tempfile
+        from pathlib import Path
+        from lifecycle import Runtime
+        from mirror import Mirror
+        from usb_input import InputBridge
+
+        with tempfile.TemporaryDirectory() as root:
+            runtime = Runtime(Path(root) / 'runtime').acquire()
+            try:
+                app = Mirror(runtime)
+                app.bridge = InputBridge(None, 'unused')
+                app.bridge.writer = object()
+                app.bridge.audio_available = True
+                app.bridge.audio_muted = False
+                app._audio_available = True
+                app._audio = Mock()
+                app._mark_audio_unavailable()
+                self.assertFalse(app._audio_available)
+                self.assertFalse(app.bridge.audio_available)
+                self.assertTrue(app.bridge.audio_muted)
+                self.assertTrue(app._redraw_audio)
+                self.assertFalse(runtime.state['audio_available'])
+                self.assertTrue(runtime.state['audio_muted'])
+                app._audio.set_muted.assert_called_once_with(True)
+                app._mark_audio_unavailable()
+                app._audio.set_muted.assert_called_once_with(True)
+            finally:
+                runtime.close()
 
 
 class CaptureAudioTests(unittest.IsolatedAsyncioTestCase):

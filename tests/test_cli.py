@@ -120,12 +120,14 @@ class CliTests(unittest.TestCase):
     @mock.patch('cli.service_main_pid', return_value=42)
     @mock.patch('cli.service_is_active', return_value=True)
     @mock.patch('cli._read_state', return_value={
-        'running': True, 'state': 'running', 'error': None, 'pid': 42, 'audio_muted': True,
+        'running': True, 'state': 'running', 'error': None, 'pid': 42,
+        'audio_muted': True, 'audio_available': False,
     })
     def test_status_includes_audio_muted(self, *_mocks):
         status = cli.current_status()
         self.assertTrue(status['running'])
         self.assertTrue(status['audio_muted'])
+        self.assertFalse(status['audio_available'])
 
     @mock.patch("cli.current_status")
     def test_status_output_is_compact_json(self, current_status):
