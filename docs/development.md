@@ -11,7 +11,7 @@
 
 Each new session selects USB when available, otherwise Wi-Fi. There is no connection selector or settings dialog. Diagnostic CLI transport overrides remain available.
 
-Landscape follow polls SpringBoard `getInterfaceOrientation` on the existing tunnel. It sets MPV `video-rotate` and resizes the window with MPV geometry plus Hyprland `resizewindowpixel` when the player pid is known. Taps are inverse-rotated into the encoded buffer. If iOS later re-encodes a landscape buffer, extra rotation is dropped so the picture is not turned twice. Orientation poll failures are logged by exception type only and do not stop video.
+Landscape follow polls SpringBoard `getInterfaceOrientation` on the existing tunnel. It sets MPV `video-rotate` and resizes the window with MPV geometry plus Hyprland `resizewindowpixel` when the player pid is known. Taps and vertical wheel scrolls are inverse-rotated into the encoded buffer. If iOS later re-encodes a landscape buffer, extra rotation is dropped so the picture is not turned twice. Orientation poll failures are logged by exception type only and do not stop video.
 
 The application reuses pinned pymobiledevice3 RTP/HEVC receiver methods, but does not start its VNC server. MPV decodes the compressed video. Wi-Fi selection temporarily replaces the pinned library's provider selector while its process-wide tunnel lock is held, and restores it in `finally`. This private API dependency needs review when updating pymobiledevice3.
 

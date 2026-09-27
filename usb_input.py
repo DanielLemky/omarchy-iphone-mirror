@@ -19,8 +19,8 @@ from pymobiledevice3.remote.core_device.hid_service import (
 from pymobiledevice3.remote.core_device.vnc_server import ASCII_TO_HID
 from pymobiledevice3.remote.core_device.pasteboard_service import PasteboardService
 from orientation import (
-    TOOLBAR_RATIO, displayed_landscape, hid_from_displayed, swapped_geometry,
-    toolbar_ratio_for, visual_rotate,
+    TOOLBAR_RATIO, displayed_landscape, hid_from_displayed, scroll_hid_delta,
+    swapped_geometry, toolbar_ratio_for, visual_rotate,
 )
 
 SPECIAL = {'SPACE': 44, 'ENTER': 40, 'KP_ENTER': 40, 'BS': 42,
@@ -155,13 +155,22 @@ class InputBridge:
                 pos = touch_position(self.mouse, self.dimensions, rotate=self.visual_rotate)
                 if pos is None or toolbar_action(self.mouse, self.dimensions, self.toolbar_ratio):
                     break
-                # Stay away from system-gesture edges. Down-wheel = finger up.
-                x = max(3277, min(62258, pos[0]))
-                y = max(13107, min(52428, pos[1]))
-                end_y = max(6554, min(58981, round(y + amount*6553)))
+                # Stay away from system-gesture edges. Down-wheel = finger up
+                # on the picture the user sees, including after video-rotate.
+                dx, dy = scroll_hid_delta(amount, self.visual_rotate)
+                if abs(dx) > abs(dy):
+                    y = max(3277, min(62258, pos[1]))
+                    x = max(13107, min(52428, pos[0]))
+                    end_x = max(6554, min(58981, round(x + dx*6553)))
+                    end_y = y
+                else:
+                    x = max(3277, min(62258, pos[0]))
+                    y = max(13107, min(52428, pos[1]))
+                    end_x = x
+                    end_y = max(6554, min(58981, round(y + dy*6553)))
                 try:
                     for step in range(9):
-                        self.contact = (x, round(y+(end_y-y)*step/8))
+                        self.contact = (round(x+(end_x-x)*step/8), round(y+(end_y-y)*step/8))
                         await self.hid.send_touchscreen(TOUCHSCREEN_STATE_CONTACT, *self.contact)
                         if step < 8:
                             await asyncio.sleep(.015)

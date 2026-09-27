@@ -41,15 +41,15 @@ def rotate_for_orientation(orientation):
 def visual_rotate(orientation, buffer_w=0, buffer_h=0):
     """Clockwise degrees to apply on top of the current encoded frame.
 
-    When iOS re-encodes the buffer in the new aspect, extra rotation would
-    double-rotate, so it is dropped.
+    A 90° or 270° turn changes aspect. When the buffer is already that
+    aspect, iOS re-encoded the frame, and extra rotation would turn it
+    twice. 0° and 180° keep the same aspect, so a portrait buffer still
+    needs the 180° turn for upside-down portrait.
     """
     wanted = rotate_for_orientation(orientation)
-    if not (buffer_w > 0 and buffer_h > 0):
+    if not (buffer_w > 0 and buffer_h > 0) or (wanted % 180) != 90:
         return wanted
-    buffer_sideways = buffer_w > buffer_h
-    wanted_sideways = (wanted % 180) == 90
-    return 0 if buffer_sideways == wanted_sideways else wanted
+    return 0 if buffer_w > buffer_h else wanted
 
 
 def displayed_landscape(buffer_w, buffer_h, rotate):
@@ -82,6 +82,18 @@ def toolbar_ratio_for(height):
     if not (height > 0):
         return TOOLBAR_RATIO
     return max(TOOLBAR_RATIO, min(MAX_TOOLBAR_RATIO, MIN_TOOLBAR_PX / height))
+
+
+def scroll_hid_delta(amount, rotate):
+    """Buffer-space ``(dx, dy)`` for a displayed-vertical finger move.
+
+    Positive ``amount`` moves the finger down on the picture the user sees
+    (wheel up). Units match ``amount``, not normalised coordinates.
+    """
+    x0, y0 = hid_from_displayed(0.5, 0.5, rotate)
+    x1, y1 = hid_from_displayed(0.5, 0.75, rotate)
+    scale = float(amount) / 0.25
+    return (x1 - x0) * scale, (y1 - y0) * scale
 
 
 def hid_from_displayed(nx, ny, rotate):
