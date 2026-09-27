@@ -9,7 +9,7 @@ An on-demand USB or Wi-Fi mirror application with an optional Omarchy bar plugin
 Run as your normal user in a terminal, not with `sudo`:
 
 ```sh
-curl -fsSL https://github.com/daniellemky/omarchy-iphone-mirror/releases/download/v0.1.1/install-online.sh | bash -s -- --release v0.1.1
+curl -fsSL https://github.com/daniellemky/omarchy-iphone-mirror/releases/download/v0.1.2/install-online.sh | bash -s -- --release v0.1.2
 ```
 
 This installs the **early alpha version specified above**, not development HEAD or a later release. The guide explains phone trust, Developer Mode, and Wi-Fi pairing. The viewer does not start automatically.
@@ -28,6 +28,7 @@ The application owns video, input, and connection management. The plugin calls t
 
 - Direct HEVC playback in MPV with low-latency settings and a local cursor.
 - Plays the phone's speaker mix over a second CoreDevice RTP stream (AAC-ELD 48 kHz, 10 ms). Video continues if audio cannot start.
+- The window follows the phone's portrait and landscape orientation. Taps are remapped to the rotated picture.
 - Taps, drags, vertical wheel scrolling, and focused-window keyboard input over USB or Wi-Fi.
 - Centered Home and Spotlight buttons, with a speaker toggle on the right. Computer playback starts muted; the speaker toggle unmutes host audio without changing the phone volume. If audio cannot start or playback stops, the speaker shows that audio is unavailable. Home uses a hardware-button event; Spotlight uses Command+Space. Neither uses a swipe.
 - Input release on focus loss and shutdown. No toggle shortcut is required.
@@ -40,9 +41,9 @@ The application owns video, input, and connection management. The plugin calls t
 - Omarchy/Linux with a working systemd user session and Hyprland.
 - Python 3.14 (tested baseline), MPV, usbmuxd, iproute2, wl-clipboard, libfdk-aac, and PipeWire (`pw-cat`).
 - A trusted iPhone with Developer Mode enabled.
-- A mounted developer image that provides the CoreDevice display and input services.
+- A developer image that provides the CoreDevice display and input services. A previously cached, matching image can be mounted automatically for a USB launch if none is mounted.
 - Tested phone: iPhone 13, iOS 27.0 build 24A437, developer image 27A5228h.
-- ARM64 Omarchy is the reference test host. Intel/x86-64 USB worked in a manual test, but Intel testing remains incomplete after repeated Wi-Fi playback failures. Intel support is not verified.
+- ARM64 Omarchy is the reference test host. Intel/x86-64 USB worked in a manual test. One later Intel test with an iPhone 15 Pro Max on iOS 27.2 had USB and Wi-Fi video and input in an initial session; later sessions on that phone stopped with `player-backlog` (#13). An earlier Intel iPhone 13 Wi-Fi session still failed with `player-backlog`. Intel support is not verified.
 
 Compatibility with other models and versions is not yet established. AssistiveTouch and Bluetooth input are not required. If the Bluetooth controller is running, leave it in computer mode while using this application.
 
@@ -54,10 +55,11 @@ These are results from specific phones and software combinations, not a complete
 | --- | --- | --- |
 | ARM64 Omarchy | iPhone 13, iOS 27.0 build 24A437, developer image 27A5228h | USB and Wi-Fi mirroring and input worked in manual tests. |
 | Intel/x86-64 Omarchy | Known-working iPhone 13, iOS 27.0, developer image 27A5228h | The user confirmed USB was working. Wi-Fi opened but stopped with `player-backlog`; the failure repeated. Individual input checks have not been recorded separately. Intel support remains unverified. |
+| Intel/x86-64 Omarchy | iPhone 15 Pro Max, iOS 27.2, developer image 27A5228h | USB worked. Wi-Fi opened and worked in an initial session; later sessions on the same phone stopped with `player-backlog` (#13). |
 | Intel/x86-64 Omarchy | Second test phone, iOS 17.1.1 | The current USB tunnel requires iOS 17.4 or later. Wi-Fi connected and the display service was present, but it reported zero supported media features; video startup failed. |
 | Intel/x86-64 Omarchy | Same second phone after updating to iOS 18.7.10, developer image 27A5228h | The image mounted and the USB tunnel connected. The display service still reported zero supported media features; usable mirroring was not established. |
 
-The second phone's model has not been recorded. These results do not prove that all iOS 17 or 18 devices fail, that iOS 27 is required, or that Intel is the cause. The known-working iOS 27 phone also worked over USB on Intel. A mounted image and an advertised display service do not by themselves establish mirroring support.
+The second phone's model has not been recorded. These results do not prove that all iOS 17 or 18 devices fail, that iOS 27 is required, or that Intel is the cause. The known-working iOS 27 phone also worked over USB on Intel. A separate Intel test with an iPhone 15 Pro Max on iOS 27.2 had USB and Wi-Fi video and input working in an initial session; later sessions on that phone stopped with `player-backlog` (#13). That does not establish general Intel or 15 Pro Max support. A mounted image and an advertised display service do not by themselves establish mirroring support.
 
 The Intel machine also has other video and suspend problems. These do not establish the cause of the mirror failure. A diagnostic test showed software HEVC decoding at about one CPU core's capacity with the app's one-thread setting. A temporary hardware-decoding test was inconclusive. Decoder settings remain unchanged; ARM64 remains the release-test reference.
 
@@ -126,7 +128,9 @@ iphone-mirror status      # JSON status; no USB connection is opened
 iphone-mirror reload-ui   # Redraw toolbar without restarting capture
 ```
 
-Closing the viewer also stops the session. Existing window focus uses Hyprland. Logs are available with:
+The window shows connection status while it starts. If the connection fails or disconnects, the window stays open and shows **Retry Connection**. Click the button, or press Enter, to try again in the same window. Connection setup has a 30-second limit after device selection and any image preparation. USB image preparation can take up to 90 seconds; opening the window and cleanup can take longer. Retry closes the previous phone session before selecting the connection again.
+
+Closing the viewer also stops the session. If you launch it again while the previous session is still closing, a temporary window shows **Closing previous connection...** until cleanup finishes. It then opens a new mirror window. Close the temporary window to cancel the launch. Existing window focus uses Hyprland. Logs are available with:
 
 ```sh
 journalctl --user -u iphone-mirror -n 30 --no-pager
@@ -138,11 +142,11 @@ The old prototype uses `iphone-usb-mirror.service`. The new application refuses 
 
 There is one **iPhone Mirror** launcher. Each new session uses USB if a matching phone is connected; otherwise it uses Wi-Fi. No connection selector or settings dialog is needed.
 
-Connecting or removing a cable does not change an active session. Close and reopen the viewer to select the available connection again. An attached USB phone with a connection error does not silently fall back to Wi-Fi. `iphone-mirror start` focuses an existing session without changing it.
+Connecting or removing a cable does not change an active session. After a failure or disconnect, use **Retry Connection** to select the available connection again. You can also close and reopen the viewer. An attached USB phone with a connection error does not silently fall back to Wi-Fi. `iphone-mirror start` focuses an existing session without changing it.
 
 Explicit CLI options remain available for diagnostics: `--connection usb`, `--connection wifi`, and `--serial DEVICE_UDID`.
 
-Wi-Fi requires an existing CoreDevice pairing record and a local network connection between the computer and phone. Discovery replaces fixed IP addresses. The application does not create new pairing records or change firewall settings. It rejects the iPhone USB-tethering interface in Wi-Fi mode. If several saved phone pairing records exist, use `--serial` to select one.
+Wi-Fi requires an existing CoreDevice pairing record and a local network connection between the computer and phone. On Linux, that record is in `~/.pymobiledevice3/` when that directory already exists, and otherwise under `${XDG_DATA_HOME:-$HOME/.local/share}/pymobiledevice3/`. Discovery replaces fixed IP addresses. The application does not create new pairing records or change firewall settings. It rejects the iPhone USB-tethering interface in Wi-Fi mode. If several saved phone pairing records exist, use `--serial` to select one.
 
 Wi-Fi video and input were tested with the USB cable disconnected. The user confirmed good operation. Locked-phone startup and network-loss recovery still need controlled testing.
 
@@ -161,7 +165,7 @@ To remove the application:
 ./uninstall.sh
 ```
 
-Removal stops the mirror and removes only its application, command, service, and launcher files. It keeps UI configuration, phone pairing records, developer images, and unrelated integrations. The optional Omarchy plugin must be removed separately if you installed it.
+Removal stops the mirror and removes only its application, command, service, and launcher files. It keeps UI configuration, phone pairing records, developer images, and unrelated integrations. On Linux, USB pairing files usually remain in `/var/lib/lockdown/`. Wi-Fi records and downloaded images remain in `~/.pymobiledevice3/` when that directory already exists, and otherwise under `${XDG_DATA_HOME:-$HOME/.local/share}/pymobiledevice3/`. The optional Omarchy plugin must be removed separately if you installed it. See [phone setup](docs/phone-setup.md#pairing-records-on-this-computer).
 
 ## Optional Omarchy plugin
 
@@ -202,15 +206,15 @@ Tests use mocked device and connection services. The MPV integration test inject
 
 The application releases input, requests that the phone stop its media stream, and then closes the player, media transport, display connection, and tunnel. It cancels only its own tasks. The user service sends the initial stop signal only to the application, so the player is not killed before this cleanup.
 
-The prototype sometimes left the developer display service unresponsive after a restart. Remounting the same developer image restored it in testing. The new shutdown path addresses problems found in the old orchestration, but repeated real-phone restart testing is still required. A failure is reported instead of silently remounting or reconnecting forever.
+The prototype sometimes left the developer display service unresponsive after a restart. Remounting the same developer image restored it in testing. The new shutdown path addresses problems found in the old orchestration, but repeated real-phone restart testing is still required. A failure is reported instead of reconnecting forever.
 
-**Developer-image recovery is explicit.** This application never mounts, unmounts, replaces, or downloads developer images automatically. Confirm the phone and image before a manual recovery operation.
+**USB image preparation:** On USB startup only, if no developer image is mounted, the viewer attempts one mount of the pinned, locally cached personalized image. It shows **Preparing iPhone...** while mounting. It copies the cached files to a private temporary directory, checks that the image and trust cache match SHA-384 digests in the pinned-build manifest, and mounts that verified copy. This links the files to the manifest; it is not an independent signature. It does not pair, download an image, unmount or replace an existing image, or mount over Wi-Fi. A ticket may be requested from Apple if the phone does not already have one. Unlock the phone for this operation. If the mount fails or times out, check its state before using Retry; do not assume it failed. An existing incompatible image still needs an explicit, manual recovery operation.
 
 ## Known limits
 
 - **Phone calls interrupt mirroring on the tested configuration** (USB, ARM64 Omarchy, iPhone 13, iOS 27.0). Video stopped when a call began, even with the phone screen on. The viewer then closed after 15 seconds without media packets. Starting a new session during the call failed. After the call ends, reopen iPhone Mirror; restarting restored live video without a pairing reset or image remount. Other configurations and call types have not been verified.
 - Lower video latency is confirmed by user testing of the prototype, but it has not been measured end to end.
-- International keyboard layouts, IME, multitouch, and horizontal wheel scrolling are not complete.
+- International keyboard layouts, IME, multitouch, and horizontal wheel scrolling are not complete. Landscape follow uses SpringBoard orientation when that service is available; if the video buffer itself becomes landscape, the window still follows.
 - An input-service failure disables input but leaves video running. A fresh click attempts reconnection without replaying the click or failed keys.
 - Audio is the phone's system output only (stereo AAC-ELD; some sessions mix to identical L/R). There is no microphone capture and no audio sent to the phone. Computer playback starts muted. Mute silences audio already queued for playback. Audio start or decode failure leaves video running, and the speaker control shows that playback is unavailable. Lower the phone volume or use headphones if the phone speaker is too loud; the app does not mute the phone.
 - The pinned pymobiledevice3 RTP receiver is reused internally. The application does not start a VNC TCP server. It opens the media transport needed to receive the phone stream; this is not a claim that the application opens no network sockets.

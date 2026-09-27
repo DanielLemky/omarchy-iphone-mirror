@@ -4,12 +4,15 @@
 
 - `mirror.py`: video session, MPV process, control socket, signals, and ordered shutdown.
 - `audio.py`: optional CoreDevice system-audio RTP, AAC-ELD 480 decode, and local PCM playback.
-- `usb_input.py`: focused-window input, Home/Spotlight toolbar with a right-edge speaker toggle, and explicit clipboard paste.
+- `orientation.py`: portrait/landscape view rotation, window aspect, and HID remapping.
+- `usb_input.py`: focused-window input, Home/Spotlight toolbar with a right-edge speaker toggle, orientation follow, and explicit clipboard paste.
 - `connection.py`: Auto selection, USB transport, and authenticated Wi-Fi discovery.
 - `lifecycle.py`: instance lock, private status, and cleanup.
 - `cli.py`: installed service control.
 
 Each new session selects USB when available, otherwise Wi-Fi. There is no connection selector or settings dialog. Diagnostic CLI transport overrides remain available.
+
+Landscape follow polls SpringBoard `getInterfaceOrientation` on the existing tunnel. It sets MPV `video-rotate` and resizes the window with MPV geometry plus Hyprland `resizewindowpixel` when the player pid is known. Taps and vertical wheel scrolls are inverse-rotated into the encoded buffer. If iOS later re-encodes a landscape buffer, extra rotation is dropped so the picture is not turned twice. Orientation poll failures are logged by exception type only and do not stop video.
 
 The application reuses pinned pymobiledevice3 RTP/HEVC receiver methods, but does not start its VNC server. MPV decodes the compressed video. System audio uses `DisplayService.start_audio_stream` with the same client session id as video. The RTP payload is an AAC-ELD access unit (48 kHz, 480-sample stereo frames, ASC `F8 E6 50 00`). Linux decodes with libfdk-aac and plays interleaved stereo PCM through `pw-cat`. Computer playback starts muted; the toolbar speaker button unmutes host audio without changing the phone volume. While muted, silence of the same frame size is still written so PipeWire does not xrun, including PCM that was queued before the mute click. Cancelling audio startup closes the player, display service, socket, and decoder, then re-raises. If audio cannot start or the player exits, the toolbar speaker shows that playback is unavailable instead of an unmuted icon. A failed decode skips the packet and does not stop video. RTCP receiver reports are sent immediately so a silent lock screen cannot let the device reap the audio session after ~20 s. Wi-Fi selection temporarily replaces the pinned library's provider selector while its process-wide tunnel lock is held, and restores it in `finally`. This private API dependency needs review when updating pymobiledevice3.
 
