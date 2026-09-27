@@ -29,7 +29,8 @@ class AgentSetupTests(unittest.TestCase):
         self.assertEqual(output['schema_version'], 1)
         security = output['data']['security']
         self.assertIn('/var/lib/lockdown', security)
-        self.assertIn('pymobiledevice3', security)
+        self.assertIn('~/.pymobiledevice3', security)
+        self.assertIn('${XDG_DATA_HOME:-$HOME/.local/share}/pymobiledevice3', security)
         self.assertIn('Uninstalling does not delete them', security)
         guard.assert_not_called()
         execute.assert_not_called()

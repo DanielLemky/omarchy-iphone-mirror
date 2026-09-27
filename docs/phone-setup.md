@@ -61,7 +61,7 @@ USB mirroring does not require this separate network pairing step. For Wi-Fi, ke
 "$PY" -m pymobiledevice3 lockdown remotepairing --pair
 ```
 
-This is a **state-changing pairing operation**. Over an already trusted USB connection, it can complete without a new Trust prompt. It writes a separate CoreDevice record under `${XDG_DATA_HOME:-$HOME/.local/share}/pymobiledevice3/` (`remote_*.plist`). Treat that file as sensitive and never include it in a public issue or repository. Uninstalling this application does not delete it.
+This is a **state-changing pairing operation**. Over an already trusted USB connection, it can complete without a new Trust prompt. It writes a separate CoreDevice record (`remote_*.plist`) in `~/.pymobiledevice3/` when that directory already exists, and otherwise under `${XDG_DATA_HOME:-$HOME/.local/share}/pymobiledevice3/`. Treat that file as sensitive and never include it in a public issue or repository. Uninstalling this application does not delete it.
 
 Connect the phone and computer to the same local network. Disconnect USB before verifying wireless discovery, so USB tethering cannot be mistaken for Wi-Fi:
 
@@ -78,14 +78,14 @@ These paths are host locations, not phone contents. They are enough to authentic
 | Kind | Typical Linux location | Created by |
 | --- | --- | --- |
 | USB trust | `/var/lib/lockdown/*.plist` | usbmuxd, during USB pairing |
-| Wi-Fi / CoreDevice pairing | `${XDG_DATA_HOME:-$HOME/.local/share}/pymobiledevice3/remote_*.plist` | Wi-Fi pairing |
-| Developer image cache | `${XDG_DATA_HOME:-$HOME/.local/share}/pymobiledevice3/` | Image download / mount |
+| Wi-Fi / CoreDevice pairing | `~/.pymobiledevice3/remote_*.plist` when that directory already exists; otherwise `${XDG_DATA_HOME:-$HOME/.local/share}/pymobiledevice3/remote_*.plist` | Wi-Fi pairing |
+| Developer image cache | the same pymobiledevice3 directory | Image download / mount |
 
 usbmuxd often leaves USB pairing files world-readable, and `/run/usbmuxd` is often reachable by every local account. This application does not change those host permissions. On a shared computer, treat USB trust as available to other local accounts. Restricting `/var/lib/lockdown` requires root and may be reset the next time usbmuxd saves a record.
 
 Downloaded images and Wi-Fi records under the pymobiledevice3 data directory are owned by your user. They are still credentials or large developer artifacts; do not share that directory.
 
-Turning off Developer Mode does not remove these files. `./uninstall.sh` does not remove them either. To revoke this computer, unpair or turn off Developer Mode on the phone and delete the local records yourself.
+Turning off Developer Mode blocks developer-service use while it is off and leaves USB trust and these files in place. `./uninstall.sh` leaves them in place too. To revoke this computer, unpair it on the phone and delete the local records yourself.
 
 ## 5. Start the viewer
 

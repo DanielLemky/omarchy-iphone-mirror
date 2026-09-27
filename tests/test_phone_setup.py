@@ -92,7 +92,8 @@ class PhoneSetupTests(unittest.TestCase):
             setup.prepare()
         text='\n'.join(str(call.args[0]) for call in output.call_args_list if call.args)
         self.assertIn('/var/lib/lockdown',text)
-        self.assertIn('~/.local/share/pymobiledevice3',text)
+        self.assertEqual(text.count('~/.pymobiledevice3'), 2)
+        self.assertEqual(text.count('${XDG_DATA_HOME:-$HOME/.local/share}/pymobiledevice3'), 2)
         self.assertIn('Uninstalling this application does not delete them.',text)
 
     def test_multiple_devices_block_changes(self):
