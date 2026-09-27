@@ -150,6 +150,24 @@ class InputTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reports[-1].args[0],2)
             self.assertIsNone(self.b.contact)
 
+    async def test_vertical_wheel_in_landscape_moves_buffer_x(self):
+        self.b.focused = True
+        self.b.visual_rotate = 270
+        self.b.dimensions = {'w':1000,'h':400,'mb':56}
+        self.b.mouse = {'x':500,'y':160,'hover':True}
+        # Displayed down is negative buffer X at 270°, so wheel-up (finger
+        # down on the picture) decreases X and leaves Y unchanged.
+        for name, sign in [('WHEEL_UP',-1),('WHEEL_DOWN',1)]:
+            self.b.hid.send_touchscreen.reset_mock()
+            await self.b.key('p--',name,'')
+            await self.b.gesture_task
+            reports = self.b.hid.send_touchscreen.await_args_list
+            self.assertEqual(len(reports),10)
+            self.assertGreater(sign*(reports[-1].args[1]-reports[0].args[1]),0)
+            self.assertEqual(reports[-1].args[2], reports[0].args[2])
+            self.assertEqual(reports[-1].args[0],2)
+            self.assertIsNone(self.b.contact)
+
     async def test_wheel_toolbar_ignored(self):
         self.b.focused = True
         self.b.dimensions = {'w':400,'h':1000,'mb':80}
