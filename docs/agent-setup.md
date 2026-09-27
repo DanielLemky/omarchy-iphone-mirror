@@ -6,7 +6,7 @@ An agent can run computer commands and explain the next phone action. It cannot 
 
 ## Tell the user how to launch the app
 
-After installation, tell the user: **Installation added iPhone Mirror to the Omarchy application launcher.** After phone setup, open the launcher, search for **iPhone Mirror**, and select it. Each launch uses USB if connected, otherwise Wi-Fi. Close the viewer with **Super + W**. The app does not start automatically at login or when a cable is connected.
+After installation, tell the user: **Installation added iPhone Mirror to the Omarchy application launcher.** After phone setup, open the launcher, search for **iPhone Mirror**, and select it. Each launch uses USB if connected, otherwise Wi-Fi. Close the viewer with **Super + W**. The app does not start automatically at login or when a cable is connected. Once opened over USB, it can mount the already-cached pinned developer image if none is mounted; it never replaces or downloads an image automatically. This mount changes the phone, so explain the behavior before opening the viewer.
 
 Do not start the viewer without permission. Include these instructions in the agent's final setup report, even if the agent used terminal commands for testing.
 
