@@ -211,9 +211,10 @@ class DirectPlayer:
                     if not n:
                         raise BrokenPipeError()
                     remaining = remaining[n:]
-        except (BrokenPipeError, OSError):
+        except (BrokenPipeError, OSError) as exc:
             if not self._stop.is_set():
-                self.on_stop(None)
+                log.warning('Player pipe failed (%s)', type(exc).__name__)
+                self.on_stop(None if self.player.poll() == 0 else 'player-pipe-failed')
 
     def close(self):
         if self._status_writer is not None:
@@ -230,6 +231,23 @@ class DirectPlayer:
         with contextlib.suppress(Exception):
             self.player.stdin.close()
         self._thread.join(timeout=1)
+
+class ReceiverDecoder:
+    """One receiver decoder generation. The application owns the MPV window."""
+    def __init__(self, player):
+        self.player = player
+        self.width, self.height = player.width, player.height
+        self.closed = False
+
+    def feed(self, data):
+        if not self.closed:
+            self.player.feed(data)
+
+    def close(self):
+        # Recovery retires this generation, not the player's pipe or window.
+        # The next generation sends fresh parameter sets and the recovery IDR.
+        self.closed = True
+
 
 def retry_hit(mouse, dimensions):
     w, h = dimensions.get('w', 0), dimensions.get('h', 0)
@@ -273,10 +291,12 @@ class Mirror:
     def stop(self, error=None):
         if error and self.error is None and not self.stop_event.is_set() and not self.cleaning_up:
             self.error = error
-        if error is None:
-            # A user, signal, or closed player requests application shutdown.
-            # Keep this separate from a failed connection attempt because the
-            # attempt event is cleared before the retry screen becomes active.
+            log.warning('Mirror attempt stopped (%s)', error)
+        if error is None or error == 'player-pipe-failed':
+            # A user, signal, closed player, or unusable player pipe requires
+            # application shutdown. Retry cannot reuse a stopped writer thread.
+            # Keep this separate from a failed phone connection attempt because
+            # the attempt event is cleared before the retry screen becomes active.
             self.loop.call_soon_threadsafe(self.shutdown_event.set)
         self.loop.call_soon_threadsafe(self.stop_event.set)
 
@@ -323,7 +343,17 @@ class Mirror:
         finally:
             writer.close()
 
-    async def capture(self, selected=None):
+    def make_decoder(self, *args, **kwargs):
+        player = self.window if self.window is not None else self.player
+        if player is not None:
+            player.configure(*args, **kwargs)
+            self.ready(player)
+        else:
+            player = DirectPlayer(*args, **kwargs, ipc_path=self.runtime.root/'mpv.sock',
+                                  on_stop=self.stop, on_ready=self.ready)
+        return ReceiverDecoder(player)
+
+    async def capture(self, selected=None, rsd=None):
         from connection import select_connection, get_tunnel
         from pymobiledevice3.remote.core_device.display_service import DisplayService
         from pymobiledevice3.remote.core_device.screen_stream import open_media_receiver
@@ -336,7 +366,7 @@ class Mirror:
         mode, serial = selected if selected is not None else await select_connection(self.connection,self.serial)
         self.runtime.update('starting', connection=mode, requested_connection=self.connection, serial=serial)
         self.stage = 'tunnel'
-        async with get_tunnel(mode,serial) as rsd:
+        async with (contextlib.nullcontext(rsd) if rsd is not None else get_tunnel(mode,serial)) as rsd:
             service = None
             transport = None
             receiver = None
@@ -357,14 +387,7 @@ class Mirror:
                 sid = answer['connection']['options']['avcMediaStreamOptionClientSessionID']['uuid']
                 self.session_id = sid if isinstance(sid, uuid.UUID) else uuid.UUID(sid)
                 receiver = VncStreamServer(rsd, bind='127.0.0.1', audio=False, decoder='av')
-                def make_player(*args, **kwargs):
-                    if self.window is not None:
-                        player = self.window.configure(*args, **kwargs)
-                        self.ready(player)
-                        return player
-                    return DirectPlayer(*args, **kwargs, ipc_path=self.runtime.root/'mpv.sock',
-                                        on_stop=self.stop, on_ready=self.ready)
-                receiver._transcoder_cls = make_player
+                receiver._transcoder_cls = self.make_decoder
                 receiver._loop = self.loop
                 cfg = answer['connection'].get('streamConfig', {})
                 receiver._local_ssrc = int(cfg.get('RemoteSSRC', 0))
@@ -428,29 +451,30 @@ class Mirror:
                                        on_stop=self.stop, on_ready=self.ready)
         self.player = self.window
         self.runtime.update('starting', player_pid=self.window.player.pid)
-        await self.window.status('Connecting to iPhone...')
+        await self.window.status('Checking iPhone...')
         from connection import select_connection
         self.stage = 'device-discovery'
         mode, serial = await asyncio.wait_for(select_connection(self.connection, self.serial), CONNECT_TIMEOUT)
-        if mode == 'usb':
-            from image_preparation import ensure_usb_image
+        from image_preparation import ensure_usb_image, prepare_image, prepared_wifi_tunnel
+        async def show_preparing():
+            self.stage = 'image-mount'
+            await self.window.status('Preparing iPhone...')
+        async def checking_image():
             self.stage = 'image-check'
-            async def show_preparing():
-                self.stage = 'image-mount'
-                await self.window.status('Preparing iPhone...')
-            preparation = asyncio.create_task(ensure_usb_image(serial, show_preparing))
-            try:
-                done, _ = await asyncio.wait((preparation,), timeout=IMAGE_PREP_TIMEOUT)
-                if not done:
-                    raise TimeoutError('image-preparation-timeout')
-                await preparation
-            finally:
-                if not preparation.done():
-                    preparation.cancel()
-                    with contextlib.suppress(asyncio.CancelledError, Exception):
-                        await preparation  # Release USB resources before stopping or Retry.
-            await self.window.status('Connecting to iPhone...')
-        capture = asyncio.create_task(self.capture((mode, serial)))
+        async def connecting():
+            self.stage = 'tunnel'
+        if mode == 'wifi':
+            async with prepared_wifi_tunnel(serial, show_preparing, checking_image, connecting,
+                                            CONNECT_TIMEOUT, IMAGE_PREP_TIMEOUT) as rsd:
+                await self._start_stream((mode, serial), rsd)
+        else:
+            await checking_image()
+            await prepare_image(ensure_usb_image(serial, show_preparing), IMAGE_PREP_TIMEOUT)
+            await self._start_stream((mode, serial))
+
+    async def _start_stream(self, selected, rsd=None):
+        await self.window.status('Starting mirror...')
+        capture = asyncio.create_task(self.capture(selected) if rsd is None else self.capture(selected, rsd=rsd))
         ready = asyncio.create_task(self.connection_ready.wait())
         try:
             done, _ = await asyncio.wait(
@@ -493,7 +517,7 @@ class Mirror:
                         or self.window.player.poll() is not None):
                     break
                 image_failure = self.stage in ('image-check', 'image-mount')
-                message = (self.error if image_failure else
+                message = (self.error if image_failure or self.stage == 'tunnel' else
                            ('Disconnected from iPhone.' if self.connected else 'Cannot connect to iPhone.')
                            + '\nCheck the connection.\nUnlock your iPhone.')
                 self.runtime.update('disconnected' if self.connected else 'error', error=self.error)
@@ -536,14 +560,23 @@ class Mirror:
             if capture in done:
                 await capture
         except Exception as error:
-            if self.stage in ('image-check', 'image-mount'):
-                from image_preparation import ImagePreparationError
-                if isinstance(error, ImagePreparationError):
-                    message = IMAGE_FAILURE_MESSAGES.get(str(error), 'Developer image could not be prepared. Check the phone before retrying.')
-                else:
-                    message = 'Developer image could not be prepared. Unlock the phone and check USB before retrying.'
+            from image_preparation import ImagePreparationError
+            from connection import (WifiConfigurationError,
+                                    WifiConnectionError, WifiDiscoveryError)
+            if isinstance(error, WifiConfigurationError):
+                message = str(error)  # Only locally defined configuration messages.
+            elif isinstance(error, WifiDiscoveryError):
+                message = 'iPhone not found on Wi-Fi. Check that it is on the same network, then Retry.'
+            elif isinstance(error, WifiConnectionError):
+                message = 'Could not connect to iPhone on Wi-Fi. Check the network and saved pairing, then Retry.'
+            elif isinstance(error, ImagePreparationError):
+                message = IMAGE_FAILURE_MESSAGES.get(str(error), 'Developer image could not be prepared. Check the phone before retrying.')
+            elif self.stage in ('image-check', 'image-mount') and isinstance(error, TimeoutError):
+                message = 'Developer image preparation timed out. Check the phone and connection before retrying.'
             else:
-                message = 'Connection failed ('+type(error).__name__+'). Check the connection, pairing, Developer Mode and developer image.'
+                if self.stage in ('image-check', 'image-mount'):
+                    self.stage = 'tunnel'
+                message = 'Connection failed ('+type(error).__name__+'). Check the connection and pairing.'
             self.error = self.error or message
             log.error('Capture failed during %s (%s)', self.stage, type(error).__name__)
         finally:

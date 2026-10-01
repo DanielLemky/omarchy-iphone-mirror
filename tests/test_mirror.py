@@ -4,10 +4,20 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+from contextlib import asynccontextmanager
 from lifecycle import Runtime
 from mirror import Mirror, DirectPlayer, retry_hit
 
 class SessionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        # Session-only tests do not contact a phone during image preparation.
+        @asynccontextmanager
+        async def prepared(*args):
+            yield None
+        self.wifi_preparation = patch('image_preparation.prepared_wifi_tunnel', prepared)
+        self.wifi_preparation.start()
+        self.addCleanup(self.wifi_preparation.stop)
+
     async def test_expected_player_exit_during_cleanup_is_not_failure(self):
         with tempfile.TemporaryDirectory() as root:
             runtime=Runtime(Path(root)/'runtime').acquire()
@@ -51,6 +61,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     return False
                 window.wait_retry=AsyncMock(side_effect=wait_retry)
                 async def capture(selected=None):
+                    app.stage='device-discovery'
                     app.connected=connected
                     raise ConnectionError()
                 app.capture=capture
@@ -59,12 +70,12 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                          patch('connection.select_connection', AsyncMock(return_value=('wifi', None))):
                         task=asyncio.create_task(app.run())
                         for _ in range(100):
-                            if window.status.await_count == 2:
+                            if window.status.await_count == 3:
                                 break
                             await asyncio.sleep(.01)
                         self.assertFalse(task.done())
                         window.close.assert_not_called()
-                        self.assertEqual(window.status.await_args_list[0].args, ('Connecting to iPhone...',))
+                        self.assertEqual(window.status.await_args_list[0].args, ('Checking iPhone...',))
                         expected='Disconnected' if connected else 'Cannot connect'
                         self.assertTrue(window.status.await_args.args[0].startswith(expected))
                         app.stop()
@@ -119,6 +130,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             window.wait_retry=AsyncMock(return_value=True)
             attempts=[]
             async def capture(selected=None):
+                app.stage='device-discovery'
                 attempts.append(True)
                 if len(attempts) == 1:
                     app.cleaning_up=True
@@ -142,7 +154,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 factory.assert_called_once()
                 window.wait_retry.assert_awaited_once()
                 window.close.assert_called_once()
-                self.assertEqual(window.status.await_args.args, ('Connecting to iPhone...',))
+                self.assertEqual(window.status.await_args.args, ('Starting mirror...',))
             finally:
                 runtime.close()
 
@@ -319,30 +331,89 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                      patch('image_preparation.ensure_usb_image', side_effect=prepare):
                     await app.start_capture()
                 self.assertEqual([c.args[0] for c in window.status.await_args_list],
-                                 ['Connecting to iPhone...', 'Preparing iPhone...', 'Connecting to iPhone...'])
+                                 ['Checking iPhone...', 'Preparing iPhone...', 'Starting mirror...'])
                 app.capture.assert_awaited_once_with(('usb', 'device'))
             finally:
                 runtime.close()
 
-    async def test_wifi_start_never_prepares_image(self):
+    async def test_wifi_start_closes_preparation_tunnel_before_fresh_capture_tunnel(self):
         with tempfile.TemporaryDirectory() as root:
             runtime=Runtime(Path(root)/'runtime').acquire()
             app=Mirror(runtime)
             window=Mock()
             window.player.pid=123
             window.status=AsyncMock()
-            app.capture=AsyncMock()
+            self.wifi_preparation.stop()
+            from contextlib import asynccontextmanager
+            events=[]
+            rsds=[]
+            @asynccontextmanager
+            async def tunnel(mode, serial):
+                self.assertEqual((mode, serial), ('wifi', 'device'))
+                rsd=Mock(peer_info={'Services': {} if not rsds else {'com.apple.coredevice.displayservice': {}}})
+                rsds.append(rsd)
+                events.append('open')
+                try:
+                    yield rsd
+                finally:
+                    events.append('close')
+            async def capture(selected, rsd=None):
+                self.assertIs(rsd, rsds[1])
+                self.assertIsNot(rsd, rsds[0])
+                app.connection_ready.set()
+                events.append('capture')
+            app.capture=capture
+            check=AsyncMock()
+            check.__aenter__.return_value=check
+            import hashlib
+            import plistlib
+            from image_preparation import LATEST_DDI_BUILD_ID
+            directory=Path(root)/'Xcode_iOS_DDI_Personalized'
+            directory.mkdir()
+            (directory/'Image.dmg').write_bytes(b'image')
+            (directory/'Image.trustcache').write_bytes(b'trust')
+            (directory/'BuildManifest.plist').write_bytes(plistlib.dumps({
+                'ProductBuildVersion': LATEST_DDI_BUILD_ID,
+                'BuildIdentities': [{'Manifest': {
+                    'PersonalizedDMG': {'Digest': hashlib.sha384(b'image').digest()},
+                    'LoadableTrustCache': {'Digest': hashlib.sha384(b'trust').digest()},
+                }}]}))
+            async def images():
+                events.append('check')
+                return ([{'PersonalizedImageVersionInfo': {'ProductBuildVersion': LATEST_DDI_BUILD_ID}}]
+                        if 'mount' in events else [])
+            check.copy_devices.side_effect=images
+            mount=AsyncMock()
+            mount.__aenter__.return_value=mount
+            async def upload(img, manifest, trust):
+                self.assertEqual((img.read_bytes(), trust.read_bytes()), (b'image', b'trust'))
+                events.append('mount')
+            mount.mount.side_effect=upload
             try:
                 with patch('mirror.DirectPlayer', return_value=window), \
-                     patch('connection.select_connection', AsyncMock(return_value=('wifi', None))), \
-                     patch('image_preparation.ensure_usb_image', new_callable=AsyncMock) as prepare:
+                     patch('connection.select_connection', AsyncMock(return_value=('wifi', 'device'))), \
+                     patch('connection.get_tunnel', side_effect=tunnel), \
+                     patch('image_preparation.MobileImageMounterService', return_value=check), \
+                     patch('image_preparation.PersonalizedImageMounter', return_value=mount), \
+                     patch('image_preparation.get_home_folder', return_value=Path(root)), \
+                     patch('image_preparation.ensure_usb_image', new_callable=AsyncMock) as usb:
                     await app.start_capture()
-                prepare.assert_not_awaited()
-                app.capture.assert_awaited_once_with(('wifi', None))
+                usb.assert_not_awaited()
+                self.assertEqual(events, ['open', 'check', 'mount', 'check', 'close', 'open', 'capture', 'close'])
+                self.assertEqual([c.args[0] for c in window.status.await_args_list],
+                                 ['Checking iPhone...', 'Preparing iPhone...', 'Starting mirror...'])
             finally:
                 runtime.close()
 
     async def test_image_preparation_timeout_waits_for_cleanup(self):
+        for mode in ('usb', 'wifi'):
+            with self.subTest(mode=mode):
+                await self.check_image_preparation_timeout(mode)
+
+    async def check_image_preparation_timeout(self, mode):
+        self.wifi_preparation.stop()
+        tunnel=AsyncMock()
+        tunnel.__aenter__.return_value=Mock(peer_info={'Services': {}})
         with tempfile.TemporaryDirectory() as root:
             runtime=Runtime(Path(root)/'runtime').acquire()
             app=Mirror(runtime)
@@ -359,8 +430,9 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     cleaned.set()
             try:
                 with patch('mirror.DirectPlayer', return_value=window), \
-                     patch('connection.select_connection', AsyncMock(return_value=('usb', 'device'))), \
-                     patch('image_preparation.ensure_usb_image', side_effect=prepare), \
+                     patch('connection.select_connection', AsyncMock(return_value=(mode, 'device'))), \
+                     patch('image_preparation.ensure_usb_image' if mode == 'usb' else 'image_preparation._ensure_image', side_effect=prepare), \
+                     patch('connection.get_tunnel', return_value=tunnel), \
                      patch('mirror.IMAGE_PREP_TIMEOUT', .01):
                     with self.assertRaises(TimeoutError):
                         await app.start_capture()
@@ -370,6 +442,14 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 runtime.close()
 
     async def test_stop_during_image_preparation_finishes_cleanup(self):
+        for mode in ('usb', 'wifi'):
+            with self.subTest(mode=mode):
+                await self.check_stop_during_image_preparation(mode)
+
+    async def check_stop_during_image_preparation(self, mode):
+        self.wifi_preparation.stop()
+        tunnel=AsyncMock()
+        tunnel.__aenter__.return_value=Mock(peer_info={'Services': {}})
         with tempfile.TemporaryDirectory() as root:
             runtime=Runtime(Path(root)/'runtime').acquire()
             app=Mirror(runtime)
@@ -388,14 +468,89 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     cleaned.set()
             try:
                 with patch('mirror.DirectPlayer', return_value=window), \
-                     patch('connection.select_connection', AsyncMock(return_value=('usb', 'device'))), \
-                     patch('image_preparation.ensure_usb_image', side_effect=prepare):
+                     patch('connection.select_connection', AsyncMock(return_value=(mode, 'device'))), \
+                     patch('image_preparation.ensure_usb_image' if mode == 'usb' else 'image_preparation._ensure_image', side_effect=prepare), \
+                     patch('connection.get_tunnel', return_value=tunnel):
                     task=asyncio.create_task(app.run_attempt())
                     await asyncio.wait_for(started.wait(), 1)
                     app.stop()
                     await asyncio.wait_for(task, 1)
                 self.assertTrue(cleaned.is_set())
                 app.capture.assert_not_awaited()
+            finally:
+                runtime.close()
+
+    async def test_wifi_tunnel_errors_are_connection_errors(self):
+        self.wifi_preparation.stop()
+        for failure_at in ('first', 'rediscovery'):
+            with self.subTest(failure_at=failure_at), tempfile.TemporaryDirectory() as root:
+                runtime=Runtime(Path(root)/'runtime').acquire()
+                app=Mirror(runtime)
+                window=Mock()
+                window.player.pid=123
+                window.status=AsyncMock()
+                app.capture=AsyncMock()
+                tunnel=AsyncMock()
+                tunnel.__aenter__.side_effect=[RuntimeError('network unreachable')] if failure_at == 'first' else [
+                    Mock(peer_info={'Services': {}}), RuntimeError('network unreachable')]
+                try:
+                    with patch('mirror.DirectPlayer', return_value=window), \
+                         patch('connection.select_connection', AsyncMock(return_value=('wifi', 'device'))), \
+                         patch('connection.get_tunnel', return_value=tunnel), \
+                         patch('image_preparation._ensure_image', new_callable=AsyncMock) as prepare:
+                        await app.run_attempt()
+                    self.assertEqual(app.error, 'Connection failed (RuntimeError). Check the connection and pairing.')
+                    self.assertNotIn('Unlock', app.error)
+                    app.capture.assert_not_awaited()
+                    self.assertEqual(prepare.await_count, 0 if failure_at == 'first' else 1)
+                    self.assertEqual(tunnel.__aexit__.await_count, 0 if failure_at == 'first' else 1)
+                finally:
+                    runtime.close()
+
+    async def test_wifi_failures_have_safe_actionable_messages(self):
+        from connection import WifiConnectionError, WifiDiscoveryError
+        cases = (
+            (WifiDiscoveryError, 'iPhone not found on Wi-Fi. Check that it is on the same network, then Retry.'),
+            (WifiConnectionError, 'Could not connect to iPhone on Wi-Fi. Check the network and saved pairing, then Retry.'),
+        )
+        for error_type, message in cases:
+            with self.subTest(error_type=error_type), tempfile.TemporaryDirectory() as root:
+                runtime = Runtime(Path(root)/'runtime').acquire()
+                try:
+                    app = Mirror(runtime)
+                    app.stage = 'tunnel'
+                    app.start_capture = AsyncMock(side_effect=error_type('private remote text'))
+                    with self.assertLogs('iphone-mirror', level='ERROR') as logs:
+                        await app.run_attempt()
+                    self.assertEqual(app.error, message)
+                    self.assertNotIn('private remote text', '\n'.join(logs.output))
+                    self.assertNotIn('Unlock', app.error)
+                finally:
+                    runtime.close()
+
+    async def test_wifi_image_has_separate_timeout_from_connection_setup(self):
+        self.wifi_preparation.stop()
+        with tempfile.TemporaryDirectory() as root:
+            runtime=Runtime(Path(root)/'runtime').acquire()
+            app=Mirror(runtime)
+            app.window=Mock()
+            app.window.player.pid=123
+            app.window.status=AsyncMock()
+            app.capture=AsyncMock()
+            tunnel=AsyncMock()
+            tunnel.__aenter__.side_effect=[Mock(peer_info={'Services': {}}),
+                                           Mock(peer_info={'Services': {'com.apple.coredevice.displayservice': {}}})]
+            async def prepare(rsd, on_missing):
+                await on_missing()
+                await asyncio.sleep(.03)
+            try:
+                with patch('connection.select_connection', AsyncMock(return_value=('wifi', 'device'))), \
+                     patch('connection.get_tunnel', return_value=tunnel), \
+                     patch('image_preparation._ensure_image', side_effect=prepare), \
+                     patch('mirror.CONNECT_TIMEOUT', .01), patch('mirror.IMAGE_PREP_TIMEOUT', 1):
+                    await app.start_capture()
+                app.capture.assert_awaited_once()
+                self.assertEqual(tunnel.__aexit__.await_count, 2)
             finally:
                 runtime.close()
 
@@ -481,9 +636,11 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 runtime.close()
 
     async def test_capture_start_and_stop_keep_tunnel_until_cleanup(self):
-        for mode in ('usb', 'wifi'):
-            with self.subTest(mode=mode):
-                await self.check_capture_start_and_stop(mode)
+        await self.check_capture_start_and_stop('usb')
+
+    async def test_wifi_advertised_display_starts_on_one_tunnel_without_image_access(self):
+        self.wifi_preparation.stop()
+        await self.check_capture_start_and_stop('wifi')
 
     async def test_timed_out_start_still_stops_on_fresh_connection(self):
         await self.check_capture_start_and_stop('usb', start_timeout=True)
@@ -495,6 +652,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     stop_error=ConnectionResetError('private data'), prior_error=prior_error)
 
     async def test_cancelled_shutdown_preserves_stop_failure_in_app_error(self):
+        self.wifi_preparation.stop()
         await self.check_capture_start_and_stop('wifi',
             stop_error=ConnectionResetError('private data'),
             prior_error='usb-stream-timeout', cancel_stop=True)
@@ -511,7 +669,8 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 def __init__(self, **kw): pass
                 async def __aenter__(self):
                     events.append('tunnel-open')
-                    return Mock(service=Mock(address=['::1']))
+                    return Mock(service=Mock(address=['::1']),
+                                peer_info={'Services': {'com.apple.coredevice.displayservice': {}}})
                 async def __aexit__(self,*args): events.append('tunnel-close')
             async def start(**kw):
                 if start_timeout:
@@ -544,9 +703,12 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.Event().wait()
                 async def close(self): events.append('input-close')
             class Player:
+                width, height = 400, 870
                 def __init__(self,*args,on_ready,**kwargs):
                     self.player=Mock(pid=123)
                     on_ready(self)
+                def configure(self, *args, **kwargs): return self
+                async def status(self, *args, **kwargs): pass
                 def close(self): events.append('player-close')
             class Receiver:
                 def __init__(self,*args,**kwargs): self._pli_tasks=set()
@@ -555,12 +717,15 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.Event().wait()
                 async def _rtcp_send_loop(self,transport): await asyncio.Event().wait()
             transport=Mock(port=1000,close=Mock(side_effect=lambda:events.append('transport-close')))
-            with patch('connection.get_tunnel', side_effect=lambda *args: Tunnel()) as tunnel_factory, \
+            with patch('connection.select_connection',AsyncMock(return_value=(mode,None))), \
+                 patch('connection.get_tunnel', side_effect=lambda *args: Tunnel()) as tunnel_factory, \
+                 patch('image_preparation.MobileImageMounterService') as image_check, \
+                 patch('image_preparation.PersonalizedImageMounter') as image_mount, \
                  patch('pymobiledevice3.remote.core_device.display_service.DisplayService',side_effect=[service,fresh]) as factory, \
                  patch('pymobiledevice3.remote.core_device.screen_stream.open_media_receiver',return_value=(transport,'::2')), \
                  patch('pymobiledevice3.remote.core_device.vnc_server.VncStreamServer',Receiver), \
                  patch('mirror.DirectPlayer',Player), patch('mirror.InputBridge',Bridge):
-                task=asyncio.create_task(app.capture((mode, None)))
+                task=asyncio.create_task(app.start_capture() if mode == 'wifi' else app.capture())
                 try:
                     if start_timeout:
                         with self.assertRaises(TimeoutError):
@@ -589,11 +754,13 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                         task.cancel()
                         await asyncio.gather(task,return_exceptions=True)
                     runtime.close()
+            image_check.assert_not_called()
+            image_mount.assert_not_called()
             expected=['tunnel-open']
             if not start_timeout:
                 expected.append('input-close')
             expected.extend(['display-close','stop-connect','device-stop','stop-close'])
-            if not start_timeout:
+            if mode == 'usb' and not start_timeout:
                 expected.append('player-close')
             self.assertEqual(events, expected+['transport-close','tunnel-close'])
             tunnel_factory.assert_called_once_with(mode, None)
