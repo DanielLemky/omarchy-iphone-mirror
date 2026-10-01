@@ -494,8 +494,16 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 await self.check_capture_start_and_stop('usb',
                     stop_error=ConnectionResetError('private data'), prior_error=prior_error)
 
-    async def check_capture_start_and_stop(self, mode, start_timeout=False, stop_error=None, prior_error=None):
+    async def test_cancelled_shutdown_preserves_stop_failure_in_app_error(self):
+        await self.check_capture_start_and_stop('wifi',
+            stop_error=ConnectionResetError('private data'),
+            prior_error='usb-stream-timeout', cancel_stop=True)
+
+    async def check_capture_start_and_stop(self, mode, start_timeout=False, stop_error=None, prior_error=None,
+                                          cancel_stop=False):
         events=[]
+        stop_entered = asyncio.Event()
+        release_stop = asyncio.Event()
         with tempfile.TemporaryDirectory() as root:
             runtime=Runtime(Path(root)/'runtime').acquire()
             app=Mirror(runtime)
@@ -515,6 +523,9 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(payload, {'stopAll': True})
                 self.assertEqual(action_identifier, 'com.apple.coredevice.action.mediastreamstop')
                 events.append('device-stop')
+                stop_entered.set()
+                if cancel_stop:
+                    await release_stop.wait()
                 if stop_error:
                     raise stop_error
             async def close(): events.append('display-close')
@@ -562,7 +573,17 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                             await asyncio.sleep(.001)
                         self.assertEqual(runtime.state['state'],'running')
                         app.stop(prior_error)
-                        await asyncio.wait_for(task,3)
+                        if cancel_stop:
+                            await asyncio.wait_for(stop_entered.wait(), 2)
+                            for _ in range(2):
+                                task.cancel()
+                                await asyncio.sleep(0)
+                            self.assertFalse(task.done())
+                            release_stop.set()
+                            with self.assertRaises(asyncio.CancelledError):
+                                await asyncio.wait_for(task,3)
+                        else:
+                            await asyncio.wait_for(task,3)
                 finally:
                     if not task.done():
                         task.cancel()

@@ -410,14 +410,16 @@ class Mirror:
             finally:
                 self.cleaning_up = True
                 self.runtime.update('stopping')
-                errors = await close_session(
+                def record_cleanup_errors(errors):
+                    if errors:
+                        self.error = ', '.join(([self.error] if self.error else []) + errors)
+                await close_session(
+                    on_errors=record_cleanup_errors,
                     bridge=self.bridge, input_task=input_task,
                     service=service, session_id=self.session_id,
                     stop_service_factory=lambda: DisplayService(rsd),
                     stream_tasks=tasks, player=None if self.window else self.player, transport=transport,
                     pli_tasks=receiver._pli_tasks if receiver else ())
-                if errors:
-                    self.error = ', '.join(([self.error] if self.error else []) + errors)
                 # The tunnel remains alive until ALL cleanup above has finished.
 
     async def start_capture(self):

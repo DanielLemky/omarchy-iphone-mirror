@@ -85,8 +85,8 @@ async def cancel_owned(tasks):
     if owned:
         await asyncio.gather(*owned, return_exceptions=True)
 
-async def close_session(**kwargs):
-    """Join owned cleanup even if the caller is cancelled more than once."""
+async def close_session(*, on_errors=None, **kwargs):
+    """Join cleanup and deliver its diagnostics before propagating cancellation."""
     cleanup = asyncio.create_task(_close_session(**kwargs))
     cancelled = False
     while True:
@@ -97,6 +97,8 @@ async def close_session(**kwargs):
             if cleanup.cancelled():
                 raise
             cancelled = True
+    if on_errors is not None:
+        on_errors(errors)
     if cancelled:
         raise asyncio.CancelledError
     return errors
