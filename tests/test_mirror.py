@@ -554,6 +554,31 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 runtime.close()
 
+    async def test_image_preparation_failures_identify_step_and_offer_unlock_guidance(self):
+        from pymobiledevice3.exceptions import PyMobileDevice3Exception
+        cases = (
+            ('image-mount', PyMobileDevice3Exception('private remote detail'),
+             'Could not mount the developer image. Unlock your iPhone and keep its screen on, then Retry.'),
+            ('image-check', PyMobileDevice3Exception('private remote detail'),
+             'Could not check the developer image. Unlock your iPhone and keep its screen on, then Retry.'),
+            ('image-mount', TimeoutError('private remote detail'),
+             'Developer image preparation timed out. Unlock your iPhone and keep its screen on, then Retry.'),
+        )
+        for stage, failure, message in cases:
+            with self.subTest(stage=stage, failure=type(failure).__name__), tempfile.TemporaryDirectory() as root:
+                runtime = Runtime(Path(root)/'runtime').acquire()
+                try:
+                    app = Mirror(runtime)
+                    app.stage = stage
+                    app.start_capture = AsyncMock(side_effect=failure)
+                    with self.assertLogs('iphone-mirror', level='ERROR') as logs:
+                        await app.run_attempt()
+                    self.assertEqual(app.error, message)
+                    self.assertEqual(app.stage, stage)
+                    self.assertNotIn('private remote detail', '\n'.join(logs.output))
+                finally:
+                    runtime.close()
+
     async def test_image_errors_show_specific_guidance(self):
         from image_preparation import ImagePreparationError
         for code, expected in (

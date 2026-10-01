@@ -572,10 +572,12 @@ class Mirror:
             elif isinstance(error, ImagePreparationError):
                 message = IMAGE_FAILURE_MESSAGES.get(str(error), 'Developer image could not be prepared. Check the phone before retrying.')
             elif self.stage in ('image-check', 'image-mount') and isinstance(error, TimeoutError):
-                message = 'Developer image preparation timed out. Check the phone and connection before retrying.'
+                message = 'Developer image preparation timed out. Unlock your iPhone and keep its screen on, then Retry.'
+            elif self.stage == 'image-mount':
+                message = 'Could not mount the developer image. Unlock your iPhone and keep its screen on, then Retry.'
+            elif self.stage == 'image-check':
+                message = 'Could not check the developer image. Unlock your iPhone and keep its screen on, then Retry.'
             else:
-                if self.stage in ('image-check', 'image-mount'):
-                    self.stage = 'tunnel'
                 message = 'Connection failed ('+type(error).__name__+'). Check the connection and pairing.'
             self.error = self.error or message
             log.error('Capture failed during %s (%s)', self.stage, type(error).__name__)
