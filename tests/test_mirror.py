@@ -481,7 +481,29 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 runtime.close()
 
     async def test_capture_start_and_stop_keep_tunnel_until_cleanup(self):
+        for mode in ('usb', 'wifi'):
+            with self.subTest(mode=mode):
+                await self.check_capture_start_and_stop(mode)
+
+    async def test_timed_out_start_still_stops_on_fresh_connection(self):
+        await self.check_capture_start_and_stop('usb', start_timeout=True)
+
+    async def test_unconfirmed_stop_sets_fixed_app_error(self):
+        for prior_error in (None, 'usb-stream-timeout'):
+            with self.subTest(prior_error=prior_error):
+                await self.check_capture_start_and_stop('usb',
+                    stop_error=ConnectionResetError('private data'), prior_error=prior_error)
+
+    async def test_cancelled_shutdown_preserves_stop_failure_in_app_error(self):
+        await self.check_capture_start_and_stop('wifi',
+            stop_error=ConnectionResetError('private data'),
+            prior_error='usb-stream-timeout', cancel_stop=True)
+
+    async def check_capture_start_and_stop(self, mode, start_timeout=False, stop_error=None, prior_error=None,
+                                          cancel_stop=False):
         events=[]
+        stop_entered = asyncio.Event()
+        release_stop = asyncio.Event()
         with tempfile.TemporaryDirectory() as root:
             runtime=Runtime(Path(root)/'runtime').acquire()
             app=Mirror(runtime)
@@ -492,12 +514,27 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     return Mock(service=Mock(address=['::1']))
                 async def __aexit__(self,*args): events.append('tunnel-close')
             async def start(**kw):
+                if start_timeout:
+                    raise TimeoutError()
                 return {'connection':{'options':{'avcMediaStreamOptionClientSessionID':{'uuid':kw['client_session_id']}},
                                       'streamConfig':{}}}
-            async def stop(sid): events.append('device-stop')
+            async def stop(feature, payload, *, action_identifier):
+                self.assertEqual(feature, 'com.apple.coredevice.feature.stopmediastream')
+                self.assertEqual(payload, {'stopAll': True})
+                self.assertEqual(action_identifier, 'com.apple.coredevice.action.mediastreamstop')
+                events.append('device-stop')
+                stop_entered.set()
+                if cancel_stop:
+                    await release_stop.wait()
+                if stop_error:
+                    raise stop_error
             async def close(): events.append('display-close')
+            async def stop_connect(): events.append('stop-connect')
+            async def stop_close(): events.append('stop-close')
             service=Mock(connect=AsyncMock(), start_video_stream=AsyncMock(side_effect=start),
-                         stop_media_stream=AsyncMock(side_effect=stop), close=AsyncMock(side_effect=close))
+                         stop_media_stream=AsyncMock(), close=AsyncMock(side_effect=close))
+            fresh=Mock(connect=AsyncMock(side_effect=stop_connect), invoke=AsyncMock(side_effect=stop),
+                       close=AsyncMock(side_effect=stop_close))
             class Bridge:
                 error = None
                 def __init__(self,*args,**kwargs):
@@ -518,28 +555,56 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.Event().wait()
                 async def _rtcp_send_loop(self,transport): await asyncio.Event().wait()
             transport=Mock(port=1000,close=Mock(side_effect=lambda:events.append('transport-close')))
-            with patch('connection.select_connection',AsyncMock(return_value=('usb',None))), \
-                 patch('pymobiledevice3.remote.userspace_tunnel.UserspaceRsdTunnel',Tunnel), \
-                 patch('pymobiledevice3.remote.core_device.display_service.DisplayService',return_value=service), \
+            with patch('connection.get_tunnel', side_effect=lambda *args: Tunnel()) as tunnel_factory, \
+                 patch('pymobiledevice3.remote.core_device.display_service.DisplayService',side_effect=[service,fresh]) as factory, \
                  patch('pymobiledevice3.remote.core_device.screen_stream.open_media_receiver',return_value=(transport,'::2')), \
                  patch('pymobiledevice3.remote.core_device.vnc_server.VncStreamServer',Receiver), \
                  patch('mirror.DirectPlayer',Player), patch('mirror.InputBridge',Bridge):
-                task=asyncio.create_task(app.capture())
+                task=asyncio.create_task(app.capture((mode, None)))
                 try:
-                    await asyncio.wait_for(app.player_ready.wait(),2)
-                    # Let the bridge complete setup, then request a normal stop.
-                    for _ in range(100):
-                        if runtime.state['state']=='running': break
-                        await asyncio.sleep(.001)
-                    self.assertEqual(runtime.state['state'],'running')
-                    app.stop()
-                    await asyncio.wait_for(task,3)
+                    if start_timeout:
+                        with self.assertRaises(TimeoutError):
+                            await asyncio.wait_for(task,3)
+                    else:
+                        await asyncio.wait_for(app.player_ready.wait(),2)
+                        # Let the bridge complete setup, then request a normal stop.
+                        for _ in range(100):
+                            if runtime.state['state']=='running': break
+                            await asyncio.sleep(.001)
+                        self.assertEqual(runtime.state['state'],'running')
+                        app.stop(prior_error)
+                        if cancel_stop:
+                            await asyncio.wait_for(stop_entered.wait(), 2)
+                            for _ in range(2):
+                                task.cancel()
+                                await asyncio.sleep(0)
+                            self.assertFalse(task.done())
+                            release_stop.set()
+                            with self.assertRaises(asyncio.CancelledError):
+                                await asyncio.wait_for(task,3)
+                        else:
+                            await asyncio.wait_for(task,3)
                 finally:
                     if not task.done():
                         task.cancel()
                         await asyncio.gather(task,return_exceptions=True)
                     runtime.close()
-            self.assertEqual(events,['tunnel-open','input-close','device-stop','player-close','transport-close','display-close','tunnel-close'])
-            self.assertIsNone(app.error)
+            expected=['tunnel-open']
+            if not start_timeout:
+                expected.append('input-close')
+            expected.extend(['display-close','stop-connect','device-stop','stop-close'])
+            if not start_timeout:
+                expected.append('player-close')
+            self.assertEqual(events, expected+['transport-close','tunnel-close'])
+            tunnel_factory.assert_called_once_with(mode, None)
+            self.assertEqual(factory.call_count, 2)
+            self.assertIs(factory.call_args_list[0].args[0], factory.call_args_list[1].args[0])
+            service.stop_media_stream.assert_not_awaited()
+            service.invoke.assert_not_called()
+            fresh.start_video_stream.assert_not_called()
+            fresh.get_media_stream_server_status.assert_not_called()
+            fresh.invoke.assert_awaited_once()
+            labels=([prior_error] if prior_error else []) + (['stream-stop-unconfirmed'] if stop_error else [])
+            self.assertEqual(app.error, ', '.join(labels) if labels else None)
 
 if __name__=='__main__':unittest.main()
