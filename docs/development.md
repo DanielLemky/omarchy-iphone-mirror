@@ -15,7 +15,7 @@ Landscape follow polls SpringBoard `getInterfaceOrientation` on the existing tun
 
 The application reuses pinned pymobiledevice3 RTP/HEVC receiver methods, but does not start its VNC server. MPV decodes the compressed video. Wi-Fi selection temporarily replaces the pinned library's provider selector while its process-wide tunnel lock is held, and restores it in `finally`. This private API dependency needs review when updating pymobiledevice3.
 
-Shutdown releases input, requests stream stop, cancels owned receiver tasks, stops MPV, closes media/display transports, and leaves the tunnel last. Handshake retries are bounded. Image remounting is never automatic.
+Shutdown releases input, closes the stream-start display connection, requests stream stop on a fresh display connection, cancels owned receiver tasks, stops MPV, closes media/display transports, and leaves the tunnel last. The stop connection sends only one reply-bearing request: `com.apple.coredevice.feature.stopmediastream` with `{"stopAll": true}`. It must not send a status request or a start request first. This follows the [upstream protocol correction](https://github.com/doronz88/pymobiledevice3/commit/480b8a3eccec31ac41c1bf80b479d1d0cdb9ba00) without changing the pinned dependency. The stop affects all CoreDevice media streams on the phone. EOF, reset, or a broken pipe is not treated as proof of device teardown. Any status query must use another fresh connection; empty sessions do not prove camera restoration. Handshake retries are bounded. Image remounting is never automatic.
 
 ## Installation
 
