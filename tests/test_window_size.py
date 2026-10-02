@@ -142,6 +142,40 @@ else:
         bridge.hypr_dispatch.assert_awaited_once_with(
             'hl.dsp.window.resize({ x = 0, y = 151, relative = true, window = "pid:123" })')
 
+    async def test_one_logical_pixel_steps_preserve_the_selected_axis(self):
+        cases = (
+            (1, 1, (370, 870), ((371, 870), (372, 870)), (0, 4)),
+            (2, 1, (772, 1742), ((774, 1742), (776, 1742)), (0, 3)),
+            (1, 3, (870, 470), ((870, 471), (870, 472)), (5, 0)),
+        )
+        for scale, orientation, initial, steps, adjustment in cases:
+            with self.subTest(scale=scale, orientation=orientation):
+                bridge = InputBridge(None, 'unused', player_pid=123)
+                bridge.command = AsyncMock()
+                bridge.hidpi_scale = scale
+                bridge.device_orientation = orientation
+                bridge.buffer_w, bridge.buffer_h = 720, 1560
+                bridge.dimensions = dict(zip(('w', 'h'), initial))
+                bridge.hypr_window = AsyncMock(return_value={
+                    'floating': True, 'size': [int(value / scale) for value in initial]})
+                bridge.hypr_dispatch = AsyncMock(return_value=0)
+                try:
+                    with patch('usb_input.shutil.which', return_value='/usr/bin/hyprctl'):
+                        await bridge.apply_view()
+                        for size in steps:
+                            bridge.dimensions = dict(zip(('w', 'h'), size))
+                            bridge.hypr_window.return_value = {
+                                'floating': True, 'size': [int(value / scale) for value in size]}
+                            await bridge.apply_view()
+                            await asyncio.sleep(.05)
+                            bridge.hypr_dispatch.assert_not_awaited()
+                        await asyncio.wait_for(bridge._resize_task, 3)
+                    x, y = adjustment
+                    bridge.hypr_dispatch.assert_awaited_once_with(
+                        f'hl.dsp.window.resize({{ x = {x}, y = {y}, relative = true, window = "pid:123" }})')
+                finally:
+                    await bridge.close()
+
     async def test_close_cancels_delayed_resize(self):
         bridge = InputBridge(None, 'unused', player_pid=123)
         bridge.command = AsyncMock()

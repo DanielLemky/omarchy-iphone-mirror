@@ -489,11 +489,12 @@ class InputBridge:
         if (not acknowledged and not queued_resize and self._last_window_size
                 and landscape == self._view_landscape):
             old_w, old_h = self._last_window_size
-            tolerance = max(1.0, self.hidpi_scale)
+            # Completion uses a rounding tolerance, but every manual step must
+            # select an axis and keep the pre-resize comparison size.
             dw, dh = abs(w - old_w), abs(h - old_h)
-            if dw > tolerance:
+            if dw > 0:
                 resize_axis = 'width'
-            elif dh > tolerance:
+            elif dh > 0:
                 resize_axis = 'height'
         if resize_axis is not None and not settled:
             await self.queue_resize()
