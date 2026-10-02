@@ -27,7 +27,8 @@ The application owns video, input, and connection management. The plugin calls t
 ## Features
 
 - Direct HEVC playback in MPV with low-latency settings and a local cursor.
-- The window follows the phone's portrait and landscape orientation. Taps are remapped to the rotated picture.
+- The window follows the phone's portrait and landscape orientation. In floating mode, it starts at a portrait size before connection, then follows the phone display ratio, with space for the toolbar. Hyprland handles resizing. After the size stops changing briefly, the mirror adjusts only the other dimension to fit the phone display. This applies to mouse and keyboard resize commands. No resize key bindings are added. In tiled mode, Hyprland controls the window size. Taps are remapped to the rotated picture.
+- Display-size metadata removes small encoder padding before rotation. If the metadata is unavailable or does not match the stream, the picture is not cropped.
 - Taps, drags, vertical wheel scrolling, and focused-window keyboard input over USB or Wi-Fi.
 - Centered Home and Spotlight buttons. Home uses a hardware-button event; Spotlight uses Command+Space. Neither uses a swipe.
 - Input release on focus loss and shutdown. No toggle shortcut is required.
@@ -180,13 +181,17 @@ This needs `wl-paste` from `wl-clipboard` and the phone's CoreDevice pasteboard 
 
 ## Toolbar appearance without restarting
 
+The toolbar is 68 pixels high, with padded, rounded-square button containers. It sits directly below the displayed phone image and uses the same width. The phone and toolbar stay centered as one group; clicks in the remaining empty space do not activate the buttons. Its height and icon size do not grow with the window. Very small windows reduce them to leave space for the picture.
+
+The toolbar uses the active Omarchy theme's `background` and `foreground` colors. The empty area around the phone display uses the same background color as the toolbar. Theme changes update the toolbar automatically, without restarting capture. The palette is read from `$XDG_STATE_HOME/omarchy/current/theme/colors.toml` (default: `~/.local/state/omarchy/current/theme/colors.toml`), with fallback to the Home-based state path if a custom XDG path has no palette. The older XDG and Home-based config paths are also supported. State paths take priority over config paths. Missing or invalid colors use the original dark background and white icons.
+
 Optional file: `~/.config/iphone-mirror/ui.json`:
 
 ```json
 {"button_spacing":64,"icon_size":28}
 ```
 
-Run `iphone-mirror reload-ui` after an edit. Values are bounded and invalid settings use defaults. `button_spacing` is the distance between the icon centers. This changes the toolbar without restarting the phone's media service.
+Run `iphone-mirror reload-ui` after an edit. Values are bounded and invalid settings use defaults. `button_spacing` is the requested distance between the icon centers. Small values increase when needed to keep the button containers apart. This changes the toolbar without restarting the phone's media service.
 
 ## Development
 
