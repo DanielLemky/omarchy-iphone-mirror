@@ -374,7 +374,7 @@ class MirrorAudioStatusTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CaptureAudioTests(unittest.IsolatedAsyncioTestCase):
-    async def test_successful_audio_is_closed_after_stream_stop(self):
+    async def test_audio_start_channel_closes_before_shared_fresh_channel_stop(self):
         events = []
         from pathlib import Path
         import tempfile
@@ -383,23 +383,28 @@ class CaptureAudioTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as root:
             runtime = Runtime(Path(root) / 'runtime').acquire()
             try:
-                audio = Mock()
-                async def audio_close():
-                    events.append('audio')
-                audio.close = AsyncMock(side_effect=audio_close)
+                audio_service = Mock(close=AsyncMock(side_effect=lambda: events.append('audio-service-close')))
+                audio = AudioSession(audio_service, Mock(), Mock(), Mock(), 1, 2, None)
                 service = Mock()
-                async def stream_stop(sid):
-                    events.append('stream-stop')
-                service.stop_media_stream = AsyncMock(side_effect=stream_stop)
                 async def service_close():
                     events.append('service-close')
                 service.close = AsyncMock(side_effect=service_close)
+                fresh = Mock(connect=AsyncMock(side_effect=lambda: events.append('stop-connect')),
+                             invoke=AsyncMock(side_effect=lambda *args, **kwargs: events.append('stream-stop')),
+                             close=AsyncMock(side_effect=lambda: events.append('stop-close')))
                 player = Mock(close=Mock(side_effect=lambda: events.append('player')))
                 transport = Mock(close=Mock(side_effect=lambda: events.append('transport')))
                 errors = await close_session(
                     bridge=None, input_task=None, service=service, session_id='s',
-                    stream_tasks=[], player=player, transport=transport, audio=audio)
+                    stream_tasks=[], player=player, transport=transport, audio=audio,
+                    stop_service_factory=lambda: fresh)
                 self.assertEqual(errors, [])
-                self.assertEqual(events, ['stream-stop', 'audio', 'player', 'transport', 'service-close'])
+                self.assertEqual(events, ['service-close', 'audio-service-close', 'stop-connect',
+                                          'stream-stop', 'stop-close', 'player', 'transport'])
+                service.stop_media_stream.assert_not_called()
+                audio_service.stop_media_stream.assert_not_called()
+                fresh.invoke.assert_awaited_once_with(
+                    'com.apple.coredevice.feature.stopmediastream', {'stopAll': True},
+                    action_identifier='com.apple.coredevice.action.mediastreamstop')
             finally:
                 runtime.close()

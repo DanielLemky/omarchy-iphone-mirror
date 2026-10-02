@@ -3,6 +3,7 @@ import asyncio
 import contextlib
 import fcntl
 import json
+import logging
 import os
 from pathlib import Path
 import tempfile
@@ -84,14 +85,34 @@ async def cancel_owned(tasks):
     if owned:
         await asyncio.gather(*owned, return_exceptions=True)
 
-async def close_session(*, bridge, input_task, service, session_id,
-                        stream_tasks, player, transport, pli_tasks=(), audio=None):
+async def close_session(*, on_errors=None, **kwargs):
+    """Join cleanup and deliver its diagnostics before propagating cancellation."""
+    cleanup = asyncio.create_task(_close_session(**kwargs))
+    cancelled = False
+    while True:
+        try:
+            errors = await asyncio.shield(cleanup)
+            break
+        except asyncio.CancelledError:
+            if cleanup.cancelled():
+                raise
+            cancelled = True
+    if on_errors is not None:
+        on_errors(errors)
+    if cancelled:
+        raise asyncio.CancelledError
+    return errors
+
+
+async def _close_session(*, bridge, input_task, service, session_id,
+                         stream_tasks, player, transport, pli_tasks=(),
+                         stop_service_factory=None, audio=None):
     """Release input, stop device stream, then dismantle the transport.
 
     Returns fixed diagnostic labels only; never exception contents or input.
     The caller retains the tunnel until this function returns.
-    Audio uses the same CoreDevice session as video; it is torn down after
-    the shared stream stop so a second stop is not reported as failure.
+    Audio uses the same CoreDevice session as video. Close both start channels
+    before the shared fresh-channel stop; audio cleanup sends no second stop.
     """
     errors = []
     await cancel_owned([input_task])
@@ -100,16 +121,26 @@ async def close_session(*, bridge, input_task, service, session_id,
             await asyncio.wait_for(bridge.close(), 4)
         except Exception:
             errors.append('input-release-failed')
-    if service is not None and session_id is not None:
+    # Close the start channel first. The stop must be the sole invocation on
+    # a new RemoteXPC channel; reusing a channel can crash dtremotedisplayd.
+    if service is not None:
         try:
-            await asyncio.wait_for(service.stop_media_stream(session_id), 5)
-        except Exception:
-            errors.append('stream-stop-failed')
+            logging.getLogger(__name__).info('Shutdown phase: display-close')
+            await asyncio.wait_for(service.close(), 2)
+        except Exception as error:
+            errors.append('display-close-failed')
+            logging.getLogger(__name__).warning('Shutdown display-close failed (%s)', type(error).__name__)
     if audio is not None:
         try:
-            await asyncio.wait_for(audio.close(), 5)
+            # Audio bounds player shutdown at 4s and start-channel close at 2s.
+            # Allow both phases before the shared device stop.
+            await asyncio.wait_for(audio.close(), 8)
         except Exception:
             errors.append('audio-stop-failed')
+    if service is not None and session_id is not None:
+        # A failed close of the old channel must not prevent teardown on a
+        # different, fresh channel. Never send another request on the old one.
+        errors.extend(await stop_attempted_stream(stop_service_factory))
     await cancel_owned([*stream_tasks, *pli_tasks])
     if player is not None:
         try:
@@ -119,9 +150,43 @@ async def close_session(*, bridge, input_task, service, session_id,
     if transport is not None:
         with contextlib.suppress(Exception):
             transport.close()
-    if service is not None:
-        try:
-            await asyncio.wait_for(service.close(), 2)
-        except Exception:
-            errors.append('display-close-failed')
+    return errors
+
+
+async def stop_attempted_stream(factory):
+    """Pinned-library compatibility: stop all streams on a fresh connection.
+
+    A reply confirms the request only, not camera restoration. Do not query
+    status here: stop must be the only reply-bearing request on this channel.
+    """
+    log = logging.getLogger(__name__)
+    errors = []
+    service = None
+    phase = 'stop-connect'
+    try:
+        log.info('Shutdown phase: %s', phase)
+        service = factory()
+        await asyncio.wait_for(service.connect(), 5)
+        phase = 'stop-request'
+        log.info('Shutdown phase: %s', phase)
+        await asyncio.wait_for(service.invoke(
+            'com.apple.coredevice.feature.stopmediastream',
+            {'stopAll': True},
+            action_identifier='com.apple.coredevice.action.mediastreamstop'), 5)
+        log.info('Shutdown phase: stop-reply')
+    except (EOFError, asyncio.IncompleteReadError, ConnectionResetError,
+            BrokenPipeError, TimeoutError) as error:
+        errors.append('stream-stop-unconfirmed')
+        log.warning('Shutdown %s unconfirmed (%s)', phase, type(error).__name__)
+    except Exception as error:
+        errors.append('stream-stop-failed')
+        log.warning('Shutdown %s failed (%s)', phase, type(error).__name__)
+    finally:
+        if service is not None:
+            try:
+                log.info('Shutdown phase: stop-close')
+                await asyncio.wait_for(service.close(), 2)
+            except Exception as error:
+                errors.append('stop-display-close-failed')
+                log.warning('Shutdown stop-close failed (%s)', type(error).__name__)
     return errors

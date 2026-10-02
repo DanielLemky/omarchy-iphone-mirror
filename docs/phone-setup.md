@@ -1,6 +1,6 @@
 # Prepare the iPhone
 
-Install the application first. Phone preparation is separate from installation. These steps can change trust, developer access, and the mounted developer image. The installer does not perform them automatically. With a trusted USB phone, the viewer can mount a matching image that is already cached locally if no image is mounted. It never pairs, downloads or replaces an image automatically.
+Install the application first. Phone preparation is separate from installation. These steps can change trust, developer access, and the mounted developer image. The installer does not perform them automatically. With a trusted USB phone or a phone with saved Wi-Fi pairing, the viewer can mount a matching image that is already cached locally if no image is mounted. Unlock the phone and keep it reachable on the local network for Wi-Fi preparation. It never pairs, downloads or replaces an image automatically.
 
 Only the combination in the README has been tested. This is not a promise that other iOS versions or developer images provide the required display service.
 
@@ -16,6 +16,8 @@ PY="${XDG_DATA_HOME:-$HOME/.local/share}/iphone-mirror/venv/bin/python"
 ```
 
 This checks USB discovery; it does not establish that the display service works. The output can contain device identifiers. Do not paste it into a public issue without removing them.
+
+If Linux detects the iPhone but this command does not list it, check whether Personal Hotspot is on. On some Linux hosts, USB tethering through `ipheth` can interfere with usbmuxd discovery. Turn Personal Hotspot off on the phone, reconnect the USB cable, and run the check again. Do not disable the driver: that would also disable USB tethering.
 
 USB trust saves pairing credentials through usbmuxd. On Linux those files are usually `/var/lib/lockdown/*.plist`. They contain host keys. Do not copy them or attach them to a public issue. Uninstalling this application does not delete them.
 
@@ -51,7 +53,7 @@ It can download and mount a developer image. Read its help before use:
 "$PY" -m pymobiledevice3 mounter auto-mount --help
 ```
 
-Automatic image selection does not guarantee that the image includes the required display service. An already mounted older image can also lack that service. Do not unmount or replace an image just because a connection failed. First check the device, image version, and diagnostic error. On USB launch, the viewer can mount the pinned image from its local cache if none is mounted. It does not replace an existing image. If it reports a timeout, check what is mounted before retrying. The image service can request a personalization ticket from Apple.
+Automatic image selection does not guarantee that the image includes the required display service. An already mounted older image can also lack that service. Do not unmount or replace an image just because a connection failed. First check the device, image version, and diagnostic error. On USB or paired Wi-Fi launch, the viewer can mount the pinned image from its local cache if none is mounted. A phone restart can remove the mounted image; a new Wi-Fi launch can restore it without a cable. It does not replace an existing image. If it reports a timeout, check what is mounted before retrying. The image service can request a personalization ticket from Apple.
 
 ## 4. Optional Wi-Fi pairing
 
