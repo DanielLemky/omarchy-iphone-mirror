@@ -5,7 +5,7 @@ clockwise degrees, matching the CSS convention used by pymobiledevice3's
 serve-web viewer after converting negative CSS angles (``-90`` -> ``270``).
 """
 TOOLBAR_RATIO = 0.08
-MIN_TOOLBAR_PX = 56
+TOOLBAR_HEIGHT_PX = 68
 MAX_TOOLBAR_RATIO = 0.22
 PORTRAIT_GEOMETRY = '400x870'
 
@@ -81,7 +81,64 @@ def toolbar_ratio_for(height):
         return TOOLBAR_RATIO
     if not (height > 0):
         return TOOLBAR_RATIO
-    return max(TOOLBAR_RATIO, min(MAX_TOOLBAR_RATIO, MIN_TOOLBAR_PX / height))
+    return min(MAX_TOOLBAR_RATIO, TOOLBAR_HEIGHT_PX / height)
+
+
+def display_size_from(info, display_id=1):
+    """Read pixel dimensions for the selected display from CoreDevice metadata."""
+    if not isinstance(info, dict) or not isinstance(info.get('displays'), list):
+        return None
+    for display in info['displays']:
+        if not isinstance(display, dict) or display.get('displayId') != display_id:
+            continue
+        mode = display.get('currentMode')
+        mode_size = mode.get('size') if isinstance(mode, dict) else None
+        for size in (mode_size, display.get('nativeSize')):
+            if (isinstance(size, (list, tuple)) and len(size) == 2
+                    and all(type(value) in (int, float) and 0 < value <= 16384
+                            and float(value).is_integer() for value in size)):
+                return tuple(sorted(int(value) for value in size))
+    return None
+
+
+def phone_frame_crop(width, height, display_size):
+    """Remove small encoder padding, only when display metadata establishes its size."""
+    if display_size is not None and width > 0 and height > 0:
+        active_w, active_h = display_size
+        if width > height:
+            active_w, active_h = active_h, active_w
+        # Do not crop scaled streams or a different display mode. HEVC padding
+        # for this stream is less than one 64-pixel coding block on each axis.
+        if 0 <= width - active_w < 64 and 0 <= height - active_h < 64:
+            crop = f'{active_w}x{active_h}+0+0' if (width, height) != (active_w, active_h) else ''
+            return active_w, active_h, crop
+    return width, height, ''
+
+
+def fitted_geometry(width, height, buffer_w, buffer_h, rotate,
+                    previous_landscape=None, resize_axis=None):
+    """Fit the frame and toolbar, preserving the user's resized axis."""
+    if min(width, height, buffer_w, buffer_h) <= 0:
+        return None
+    frame_w, frame_h = buffer_w, buffer_h
+    if rotate % 180 == 90:
+        frame_w, frame_h = frame_h, frame_w
+    landscape = frame_w > frame_h
+    flipped = previous_landscape is not None and landscape != previous_landscape
+    anchor_width = resize_axis == 'width' or (landscape and resize_axis != 'height')
+    if anchor_width:
+        target_w = height if flipped else width
+        if previous_landscape is None and resize_axis is None:
+            target_w = max(width, height)
+        video_h = target_w * frame_h / frame_w
+        # Solve h * (1 - toolbar_ratio_for(h)) == video_h.
+        target_h = min(video_h / (1 - MAX_TOOLBAR_RATIO), video_h + TOOLBAR_HEIGHT_PX)
+    else:
+        target_h = width if flipped else height
+        if previous_landscape is None and resize_axis is None:
+            target_h = max(width, height)
+        target_w = target_h * (1 - toolbar_ratio_for(target_h)) * frame_w / frame_h
+    return max(1, round(target_w)), max(1, round(target_h))
 
 
 def scroll_hid_delta(amount, rotate):

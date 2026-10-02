@@ -71,6 +71,7 @@ class DirectPlayer:
         return self
 
     async def status(self, text, *, ended=False):
+        first_status = self._status_writer is None
         if self._status_writer is None:
             for _ in range(100):
                 if self.player.poll() is not None:
@@ -114,12 +115,36 @@ class DirectPlayer:
                             if reply.get('error') != 'success':
                                 raise RuntimeError('player-status-failed')
                             break
+            if first_status:
+                await self.set_initial_size()
         except BaseException:
             writer.close()
             self._status_reader = self._status_writer = None
             raise
         # MPV owns overlays per IPC client. Keep this client connected until
         # the window closes, including while capture and cleanup are running.
+
+    async def set_initial_size(self):
+        """Use a portrait size before video arrives; leave tiled windows alone."""
+        pid = self.player.pid
+        if type(pid) is not int or pid <= 0:
+            return
+        bridge = InputBridge(None, self.ipc_path, player_pid=pid)
+        bridge.writer = self._status_writer
+        # The initial 400x870 size is in logical pixels, before MPV reports a scale.
+        try:
+            if shutil.which('hyprctl'):
+                async with asyncio.timeout(2):
+                    while (window := await bridge.hypr_window()) is None:
+                        if self.player.poll() is not None:
+                            return
+                        await asyncio.sleep(.05)
+                    if window.get('floating'):
+                        await bridge.resize_window(400, 870, window=window)
+            else:
+                await bridge.command('set_property', 'geometry', '400x870')
+        except (OSError, TimeoutError):
+            log.warning('Initial window size could not be set')
 
     async def wait_retry(self, stop_event):
         reader, writer = await asyncio.open_unix_connection(self.ipc_path)
