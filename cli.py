@@ -170,6 +170,10 @@ def current_status() -> dict[str, Any]:
     player_pid = state.get("player_pid")
     if isinstance(player_pid, int) and not isinstance(player_pid, bool):
         result["player_pid"] = player_pid
+    if isinstance(state.get("audio_muted"), bool):
+        result["audio_muted"] = state["audio_muted"]
+    if isinstance(state.get("audio_available"), bool):
+        result["audio_available"] = state["audio_available"]
     return result
 
 

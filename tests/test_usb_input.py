@@ -16,6 +16,7 @@ class MappingTests(unittest.TestCase):
         dims = {'w':400, 'h':1000}
         self.assertEqual(toolbar_action({'x':100,'y':960,'hover':True},dims),'home')
         self.assertEqual(toolbar_action({'x':300,'y':960,'hover':True},dims),'search')
+        self.assertEqual(toolbar_action({'x':360,'y':960,'hover':True},dims),'audio')
         self.assertIsNone(toolbar_action({'x':300,'y':910,'hover':True},dims))
         self.assertIsNone(toolbar_action({'x':300,'y':960,'hover':False},dims))
 
@@ -28,7 +29,8 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(toolbar_bounds(wide), (180, 468, 540, 536))
         self.assertEqual(toolbar_action({'x': 300, 'y': 500, 'hover': True}, wide), 'home')
         self.assertEqual(toolbar_action({'x': 400, 'y': 500, 'hover': True}, wide), 'search')
-        for x, y in ((100, 500), (600, 500), (400, 550), (400, 467)):
+        self.assertEqual(toolbar_action({'x': 500, 'y': 500, 'hover': True}, wide), 'audio')
+        for x, y in ((100, 500), (600, 500), (500, 550), (500, 467), (540, 500)):
             with self.subTest(x=x, y=y):
                 self.assertIsNone(toolbar_action({'x': x, 'y': y, 'hover': True}, wide))
 
@@ -96,6 +98,63 @@ class InputTests(unittest.IsolatedAsyncioTestCase):
             buttons = self.b.indigo.send_button.await_args_list
             self.assertEqual([c.args for c in buttons], [(12,64,1),(12,64,2)])
             self.assertIsNone(self.b.contact)
+
+    async def test_toolbar_audio_toggles_without_hid(self):
+        toggles = []
+        self.b.focused = True
+        self.b.dimensions = {'w':400,'h':1000}
+        self.b.on_audio_toggle = toggles.append
+        self.b.mouse = {'x':360,'y':960,'hover':True}
+        self.assertTrue(self.b.audio_muted)
+        await self.b.key('dm-','MBTN_LEFT','')
+        await self.b.gesture_task
+        self.assertEqual(toggles, [False])
+        self.assertFalse(self.b.audio_muted)
+        self.b.indigo.send_button.assert_not_awaited()
+        self.b.hid.send_touchscreen.assert_not_awaited()
+        await self.b.key('dm-','MBTN_LEFT','')
+        await self.b.gesture_task
+        self.assertEqual(toggles, [False, True])
+        self.assertTrue(self.b.audio_muted)
+
+    async def test_speaker_draws_unavailable_instead_of_unmuted(self):
+        self.b.dimensions = {'w': 400, 'h': 1000}
+        self.b.audio_available = False
+        self.b.audio_muted = False
+        await self.b.draw_toolbar()
+        overlay = self.b.command.await_args.args[3]
+        self.assertIn('&H808080&', overlay)
+        self.assertIn('m 20 4 l 4 20', overlay)
+        self.assertNotIn('m 17 8', overlay)
+
+    async def test_muted_speaker_is_not_the_unavailable_mark(self):
+        self.b.dimensions = {'w': 400, 'h': 1000}
+        self.b.audio_available = True
+        self.b.audio_muted = True
+        await self.b.draw_toolbar()
+        overlay = self.b.command.await_args.args[3]
+        self.assertIn('m 4 4 l 20 20', overlay)
+        self.assertNotIn('m 20 4 l 4 20', overlay)
+        self.assertNotIn('m 17 8', overlay)
+
+    async def test_unavailable_speaker_does_not_unmute(self):
+        toggles = []
+        self.b.focused = True
+        self.b.dimensions = {'w': 400, 'h': 1000}
+        self.b.audio_available = False
+        self.b.on_audio_toggle = toggles.append
+        self.b.mouse = {'x': 360, 'y': 960, 'hover': True}
+        await self.b.key('dm-', 'MBTN_LEFT', '')
+        await self.b.gesture_task
+        self.assertEqual(toggles, [])
+        self.assertTrue(self.b.audio_muted)
+        self.assertFalse(self.b.audio_available)
+        texts = [c.args for c in self.b.command.await_args_list if c.args and c.args[0] == 'show-text']
+        self.assertEqual(texts, [('show-text', 'Audio is not available.', 2000)])
+        overlays = [c.args[3] for c in self.b.command.await_args_list
+                    if c.args and c.args[0] == 'osd-overlay']
+        self.assertTrue(overlays)
+        self.assertIn('m 20 4 l 4 20', overlays[-1])
 
     async def test_cancel_toolbar_gesture(self):
         import asyncio

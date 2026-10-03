@@ -27,10 +27,11 @@ The application owns video, input, and connection management. The plugin calls t
 ## Features
 
 - Direct HEVC playback in MPV with low-latency settings and a local cursor.
+- Plays the phone's speaker mix over a second CoreDevice RTP stream (AAC-ELD 48 kHz, 10 ms). Video continues if audio cannot start.
 - The window follows the phone's portrait and landscape orientation. In floating mode, it starts at a portrait size before connection, then follows the phone display ratio, with space for the toolbar. Hyprland handles resizing. After the size stops changing briefly, the mirror adjusts only the other dimension to fit the phone display. This applies to mouse and keyboard resize commands. No resize key bindings are added. In tiled mode, Hyprland controls the window size. Taps are remapped to the rotated picture.
 - Display-size metadata removes small encoder padding before rotation. If the metadata is unavailable or does not match the stream, the picture is not cropped.
 - Taps, drags, vertical wheel scrolling, and focused-window keyboard input over USB or Wi-Fi.
-- Centered Home and Spotlight buttons. Home uses a hardware-button event; Spotlight uses Command+Space. Neither uses a swipe.
+- Centered Home and Spotlight buttons, with a speaker toggle on the right. Computer playback starts muted; the speaker toggle unmutes host audio without changing the phone volume. If audio cannot start or playback stops, the speaker shows that audio is unavailable. Home uses a hardware-button event; Spotlight uses Command+Space. Neither uses a swipe.
 - Input release on focus loss and shutdown. No toggle shortcut is required.
 - One application instance, private runtime files, and structured status.
 - Manual start only: no startup at login or when a USB cable is connected.
@@ -39,7 +40,8 @@ The application owns video, input, and connection management. The plugin calls t
 ## Requirements
 
 - Omarchy/Linux with a working systemd user session and Hyprland.
-- Python 3.14 (tested baseline), MPV, usbmuxd, iproute2, and wl-clipboard.
+- Python 3.14 (tested baseline), MPV, usbmuxd, iproute2, wl-clipboard, and PipeWire (`pw-cat`).
+- System audio needs libfdk-aac. Without it, the viewer still installs and runs, and the speaker shows that audio is unavailable.
 - A trusted iPhone with Developer Mode enabled.
 - A developer image that provides the CoreDevice display and input services. A previously cached, matching image can be mounted automatically for a USB or paired Wi-Fi launch if none is mounted.
 - Tested phone: iPhone 13, iOS 27.0 build 24A437, developer image 27A5228h.
@@ -220,6 +222,7 @@ The prototype sometimes left the developer display service unresponsive after a 
 - Lower video latency is confirmed by user testing of the prototype, but it has not been measured end to end.
 - International keyboard layouts, IME, multitouch, and horizontal wheel scrolling are not complete. Landscape follow uses SpringBoard orientation when that service is available; if the video buffer itself becomes landscape, the window still follows.
 - An input-service failure disables input but leaves video running. A fresh click attempts reconnection without replaying the click or failed keys.
+- Audio is the phone's system output only (stereo AAC-ELD; some sessions mix to identical L/R). There is no microphone capture and no audio sent to the phone. Computer playback starts muted. Mute silences audio already queued for playback. Audio start or decode failure leaves video running, and the speaker control shows that playback is unavailable. A failed audio receive socket does the same while the PCM player is still running. Without libfdk-aac, installation still completes and the speaker shows that audio is unavailable. Lower the phone volume or use headphones if the phone speaker is too loud; the app does not mute the phone.
 - The pinned pymobiledevice3 RTP receiver is reused internally. The application does not start a VNC TCP server. It opens the media transport needed to receive the phone stream; this is not a claim that the application opens no network sockets.
 - The complete locked-phone USB unlock flow still needs controlled validation. Passcodes must remain user-entered and must never be logged.
 

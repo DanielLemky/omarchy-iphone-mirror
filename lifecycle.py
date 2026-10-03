@@ -106,11 +106,13 @@ async def close_session(*, on_errors=None, **kwargs):
 
 async def _close_session(*, bridge, input_task, service, session_id,
                          stream_tasks, player, transport, pli_tasks=(),
-                         stop_service_factory=None):
+                         stop_service_factory=None, audio=None):
     """Release input, stop device stream, then dismantle the transport.
 
     Returns fixed diagnostic labels only; never exception contents or input.
     The caller retains the tunnel until this function returns.
+    Audio uses the same CoreDevice session as video. Close both start channels
+    before the shared fresh-channel stop; audio cleanup sends no second stop.
     """
     errors = []
     await cancel_owned([input_task])
@@ -128,6 +130,13 @@ async def _close_session(*, bridge, input_task, service, session_id,
         except Exception as error:
             errors.append('display-close-failed')
             logging.getLogger(__name__).warning('Shutdown display-close failed (%s)', type(error).__name__)
+    if audio is not None:
+        try:
+            # Audio bounds player shutdown at 4s and start-channel close at 2s.
+            # Allow both phases before the shared device stop.
+            await asyncio.wait_for(audio.close(), 8)
+        except Exception:
+            errors.append('audio-stop-failed')
     if service is not None and session_id is not None:
         # A failed close of the old channel must not prevent teardown on a
         # different, fresh channel. Never send another request on the old one.

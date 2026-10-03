@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from usb_input import InputBridge
+from usb_input import InputBridge, toolbar_action
 
 
 class ToolbarThemeTests(unittest.IsolatedAsyncioTestCase):
@@ -22,7 +22,7 @@ class ToolbarThemeTests(unittest.IsolatedAsyncioTestCase):
                     await bridge.draw_toolbar()
                     overlay = bridge.command.await_args.args[3]
                     scales = re.findall(r'\\fscx([^\\]+)', overlay)
-                    self.assertEqual(len(scales), 2)
+                    self.assertEqual(len(scales), 4)
                     for scale in scales:
                         self.assertAlmostEqual(float(scale) * 24 / 100, 28)
 
@@ -39,6 +39,27 @@ class ToolbarThemeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn((378, 488), positions)
         self.assertIn('m 180 468 l 540 468 540 536 180 536', overlay)
 
+    async def test_speaker_draw_and_click_follow_the_image_bounds(self):
+        bridge = InputBridge(None, 'unused')
+        bridge.command = AsyncMock()
+        for dimensions in (
+                {'w': 800, 'h': 600, 'ml': 180, 'mr': 260, 'mt': 64, 'mb': 132},
+                {'w': 1200, 'h': 450, 'ml': 100, 'mr': 160, 'mb': 90}):
+            with self.subTest(dimensions=dimensions):
+                bridge.dimensions = dimensions
+                with patch('usb_input.load_ui', return_value={'icon_size': 28, 'button_spacing': 64}):
+                    await bridge.draw_toolbar()
+                overlay = bridge.command.await_args.args[3]
+                speaker = next(event for event in overlay.splitlines() if 'm 2 9 l 8 9' in event)
+                x, y = map(float, re.search(r'\\pos\(([-.0-9]+),([-.0-9]+)\)', speaker).groups())
+                self.assertEqual(toolbar_action({'x': x+14, 'y': y+14, 'hover': True},
+                                                dimensions, bridge.toolbar_ratio), 'audio')
+                self.assertLess(x+28, dimensions['w']-dimensions['mr'])
+                for mouse in (
+                        {'x': dimensions['w']-20, 'y': y+14, 'hover': True},
+                        {'x': x+14, 'y': dimensions['h']-1, 'hover': True}):
+                    self.assertIsNone(toolbar_action(mouse, dimensions, bridge.toolbar_ratio))
+
     async def test_palette_and_live_change(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / 'state'
@@ -54,9 +75,9 @@ class ToolbarThemeTests(unittest.IsolatedAsyncioTestCase):
                 bridge.command.assert_any_await('set_property', 'background-color', '#123456')
                 overlay = bridge.command.await_args.args[3]
                 self.assertIn(r'\1c&H563412&', overlay)
-                self.assertEqual(overlay.count(r'\1c&H684624&'), 2)
-                self.assertIn(r'\1c&HEFCDAB&', overlay)
-                self.assertIn(r'\3c&HEFCDAB&', overlay)
+                self.assertEqual(overlay.count(r'\1c&H684624&'), 3)
+                self.assertEqual(overlay.count(r'\1c&HEFCDAB&'), 2)
+                self.assertEqual(overlay.count(r'\3c&HEFCDAB&'), 2)
                 theme.write_text('background = "#faf7f1"\nforeground = "#382a22"\n')
                 task = asyncio.create_task(bridge.theme_loop())
                 try:
@@ -66,9 +87,9 @@ class ToolbarThemeTests(unittest.IsolatedAsyncioTestCase):
                     bridge.command.assert_any_await('set_property', 'background-color', '#FAF7F1')
                     overlay = bridge.command.await_args.args[3]
                     self.assertIn(r'\1c&HF1F7FA&', overlay)
-                    self.assertEqual(overlay.count(r'\1c&HD8DEE3&'), 2)
-                    self.assertIn(r'\1c&H222A38&', overlay)
-                    self.assertIn(r'\3c&H222A38&', overlay)
+                    self.assertEqual(overlay.count(r'\1c&HD8DEE3&'), 3)
+                    self.assertEqual(overlay.count(r'\1c&H222A38&'), 2)
+                    self.assertEqual(overlay.count(r'\3c&H222A38&'), 2)
                 finally:
                     task.cancel()
                     with self.assertRaises(asyncio.CancelledError):

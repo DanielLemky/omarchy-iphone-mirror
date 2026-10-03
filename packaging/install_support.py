@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import fcntl
 from contextlib import contextmanager
 import os
@@ -22,7 +24,7 @@ OWNED_NAMES = (
     "desktop_wifi",
     "desktop_auto",
 )
-APP_FILES = ("mirror.py", "usb_input.py", "orientation.py", "lifecycle.py", "connection.py", "image_preparation.py", "cli.py", "requirements.txt", "LICENSE", "THIRD_PARTY_NOTICES.md", "setup-phone.py", "phone_setup_agent.py")
+APP_FILES = ("mirror.py", "usb_input.py", "orientation.py", "audio.py", "lifecycle.py", "connection.py", "image_preparation.py", "cli.py", "requirements.txt", "LICENSE", "THIRD_PARTY_NOTICES.md", "setup-phone.py", "phone_setup_agent.py")
 
 
 def fail(message: str) -> "NoReturn":
@@ -309,6 +311,25 @@ def uninstall() -> None:
         remove_exact(paths[key])
 
 
+def fdk_aac_loadable() -> bool:
+    """Same library names as Eld480Decoder. A missing library leaves video usable."""
+    if os.environ.get("AUDIO_LIB_MISSING") == "1":
+        return False
+    name = ctypes.util.find_library("fdk-aac") or "libfdk-aac.so.2"
+    try:
+        ctypes.CDLL(name)
+    except OSError:
+        return False
+    return True
+
+
+def warn_optional_audio() -> None:
+    if fdk_aac_loadable():
+        return
+    print("iphone-mirror: libfdk-aac is not installed; system audio will be unavailable", file=sys.stderr)
+    print("iphone-mirror: video and input still install. For system audio, run: omarchy pkg add libfdk-aac", file=sys.stderr)
+
+
 def validate_source(source: Path) -> None:
     required = [source / name for name in APP_FILES]
     required += [source / "packaging" / name for name in (
@@ -336,6 +357,8 @@ def main() -> None:
     elif command == "check-lock" and len(sys.argv) == 2:
         if lock_is_held():
             fail("the application lock is active; stop the mirror first")
+    elif command == "audio-deps" and len(sys.argv) == 2:
+        warn_optional_audio()
     elif command == "validate-source" and len(sys.argv) == 3:
         validate_source(Path(sys.argv[2]))
     elif command == "install" and len(sys.argv) == 3:

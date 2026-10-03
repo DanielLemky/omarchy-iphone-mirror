@@ -749,6 +749,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                  patch('pymobiledevice3.remote.core_device.display_service.DisplayService',side_effect=[service,fresh]) as factory, \
                  patch('pymobiledevice3.remote.core_device.screen_stream.open_media_receiver',return_value=(transport,'::2')), \
                  patch('pymobiledevice3.remote.core_device.vnc_server.VncStreamServer',Receiver), \
+                 patch('mirror.start_system_audio',AsyncMock(return_value=None)), \
                  patch('mirror.DirectPlayer',Player), patch('mirror.InputBridge',Bridge):
                 task=asyncio.create_task(app.start_capture() if mode == 'wifi' else app.capture())
                 try:
@@ -798,5 +799,8 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             fresh.invoke.assert_awaited_once()
             labels=([prior_error] if prior_error else []) + (['stream-stop-unconfirmed'] if stop_error else [])
             self.assertEqual(app.error, ', '.join(labels) if labels else None)
+            if not start_timeout:
+                self.assertFalse(runtime.state['audio_available'])
+                self.assertTrue(runtime.state['audio_muted'])
 
 if __name__=='__main__':unittest.main()

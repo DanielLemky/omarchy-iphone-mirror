@@ -137,6 +137,10 @@ def toolbar_action(mouse, dimensions, ratio=None):
     left, top, right, bottom = bounds
     x, y = mouse.get('x', -1), mouse.get('y', -1)
     if mouse.get('hover') and left <= x < right and top <= y < bottom:
+        # Home | Spotlight stay split at center; speaker uses a right-edge strip.
+        audio_left = right - max((right - left) * 0.18, 56)
+        if x >= audio_left:
+            return 'audio'
         return 'home' if x < (left+right)/2 else 'search'
     return None
 
@@ -191,6 +195,9 @@ class InputBridge:
         self.scrolling = False
         self.scroll_pending = 0.0
         self.paste_cancel_until = 0.0
+        self.audio_muted = True
+        self.audio_available = True
+        self.on_audio_toggle = None
         self.device_orientation = 1
         self.buffer_w = 0
         self.buffer_h = 0
@@ -291,7 +298,35 @@ class InputBridge:
                   'm 10 2 b 5.6 2 2 5.6 2 10 b 2 14.4 5.6 18 10 18 '
                   'b 14.4 18 18 14.4 18 10 b 18 5.6 14.4 2 10 2 '
                   'm 16 16 l 23 23')
-        await self.command('osd-overlay', 61, 'ass-events', '\n'.join([background, *tiles, icon, search]), w, h)
+        pad = max(8.0, size * 0.4)
+        audio_x = right - size - pad
+        if audio_x < search_x + size:
+            audio_x = search_x + size + pad
+        tiles.append(rounded_square_ass(audio_x + size/2 - tile_size/2,
+                                        center-tile_size/2, tile_size, tile_color))
+        # Unavailable is a gray speaker with an X. Muted is a themed speaker
+        # with one slash. Unmuted adds waves. An X is not the mute glyph, so
+        # a dead player is not drawn as if it were playing.
+        if not self.audio_available:
+            speaker_color = r'&H808080&'
+        else:
+            speaker_color = f'&H{colors["foreground"]}&'
+        speaker = (rf'{{\an7\pos({audio_x},{y})\bord0\shad0\1c{speaker_color}\fscx{scale*100}\fscy{scale*100}\p1}}'
+                   'm 2 9 l 8 9 14 4 14 20 8 15 2 15')
+        if not self.audio_available:
+            mark = (rf'{{\an7\pos({audio_x},{y})\bord2\shad0\1a&HFF&\3c&H808080&\fscx{scale*100}\fscy{scale*100}\p1}}'
+                    'm 4 4 l 20 20 m 20 4 l 4 20')
+            audio_events = [speaker, mark]
+        elif self.audio_muted:
+            slash = (rf'{{\an7\pos({audio_x},{y})\bord2\shad0\1a&HFF&\3c{speaker_color}\fscx{scale*100}\fscy{scale*100}\p1}}'
+                     'm 4 4 l 20 20')
+            audio_events = [speaker, slash]
+        else:
+            waves = (rf'{{\an7\pos({audio_x},{y})\bord2\shad0\1a&HFF&\3c{speaker_color}\fscx{scale*100}\fscy{scale*100}\p1}}'
+                     'm 17 8 b 20 12 20 12 17 16 m 19 6 b 24 12 24 12 19 18')
+            audio_events = [speaker, waves]
+        await self.command('osd-overlay', 61, 'ass-events',
+                           '\n'.join([background, *tiles, icon, search, *audio_events]), w, h)
         self.toolbar_colors = colors
 
     async def theme_loop(self):
@@ -339,6 +374,21 @@ class InputBridge:
                 self.home_down = False
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(self.indigo.send_button(0x0C, 0x40, HID_BUTTON_STATE_UP), 1)
+            self.gesture_task = None
+
+    async def audio_button(self):
+        """Toggle computer playback. Does not change the phone volume."""
+        try:
+            if not self.audio_available:
+                self.audio_muted = True
+                await self.draw_toolbar()
+                await self.command('show-text', 'Audio is not available.', 2000)
+                return
+            self.audio_muted = not self.audio_muted
+            if self.on_audio_toggle is not None:
+                self.on_audio_toggle(self.audio_muted)
+            await self.draw_toolbar()
+        finally:
             self.gesture_task = None
 
     async def command(self, *args):
@@ -740,7 +790,12 @@ class InputBridge:
                 button = toolbar_action(self.mouse, self.dimensions, self.toolbar_ratio)
                 if button is not None:
                     await self.release()
-                    task = self.home_button() if button == 'home' else self.search_button()
+                    if button == 'home':
+                        task = self.home_button()
+                    elif button == 'audio':
+                        task = self.audio_button()
+                    else:
+                        task = self.search_button()
                     self.gesture_task = asyncio.create_task(task)
                     return
                 pos = touch_position(self.mouse, self.dimensions, rotate=self.visual_rotate)

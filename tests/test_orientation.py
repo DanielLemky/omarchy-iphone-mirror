@@ -111,7 +111,8 @@ class TouchRotateTests(unittest.TestCase):
     def test_toolbar_still_window_bottom(self):
         dims = {'w': 870, 'h': 400, 'mb': 56}
         self.assertEqual(toolbar_action({'x':100,'y':380,'hover':True}, dims), 'home')
-        self.assertEqual(toolbar_action({'x':800,'y':380,'hover':True}, dims), 'search')
+        self.assertEqual(toolbar_action({'x':600,'y':380,'hover':True}, dims), 'search')
+        self.assertEqual(toolbar_action({'x':800,'y':380,'hover':True}, dims), 'audio')
         self.assertIsNone(toolbar_action({'x':400,'y':200,'hover':True}, dims))
 
 

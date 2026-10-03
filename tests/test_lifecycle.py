@@ -82,11 +82,14 @@ class CleanupTests(unittest.IsolatedAsyncioTestCase):
         unrelated=asyncio.create_task(asyncio.Event().wait())
         stream=asyncio.create_task(asyncio.Event().wait())
         try:
+            async def audio_close():
+                events.append('audio')
+            audio=Mock(close=AsyncMock(side_effect=audio_close))
             errors=await close_session(bridge=bridge,input_task=None,service=service,
                 session_id='session',stream_tasks=[stream],player=player,transport=transport,
-                stop_service_factory=factory)
+                stop_service_factory=factory, audio=audio)
             self.assertEqual(errors,[])
-            self.assertEqual(events,['input','service-close','stop-connect','stream-stop','stop-close','player','transport'])
+            self.assertEqual(events,['input','service-close','audio','stop-connect','stream-stop','stop-close','player','transport'])
             service.stop_media_stream.assert_not_called()
             factory.assert_called_once()
             rsd.start_remote_service.assert_called_once()
@@ -179,6 +182,18 @@ class CleanupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.await_args.args[0]['CoreDevice.input'], {'stopAll': True})
         service.stop_media_stream.assert_not_called()
         rsd.start_remote_service.return_value.close.assert_awaited_once()
+        transport.close.assert_called_once()
+
+    async def test_audio_close_failure_still_stops_on_fresh_channel(self):
+        fresh, rsd = self.stop_service([])
+        service = Mock(close=AsyncMock())
+        audio = Mock(close=AsyncMock(side_effect=RuntimeError('private data')))
+        transport = Mock()
+        errors = await close_session(bridge=None, input_task=None, service=service,
+            session_id='session', stream_tasks=[], player=None, transport=transport,
+            audio=audio, stop_service_factory=lambda: fresh)
+        self.assertEqual(errors, ['audio-stop-failed'])
+        rsd.start_remote_service.return_value.send_receive_request.assert_awaited_once()
         transport.close.assert_called_once()
 
     async def test_fresh_channel_close_failure_still_closes_local_transport(self):
