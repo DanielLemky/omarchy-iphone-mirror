@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import AsyncMock
-from usb_input import InputBridge, key_usages, touch_position, toolbar_action
+from usb_input import InputBridge, key_usages, touch_position, toolbar_action, toolbar_bounds
 
 class MappingTests(unittest.TestCase):
     def test_ascii(self):
@@ -19,6 +19,20 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(toolbar_action({'x':360,'y':960,'hover':True},dims),'audio')
         self.assertIsNone(toolbar_action({'x':300,'y':910,'hover':True},dims))
         self.assertIsNone(toolbar_action({'x':300,'y':960,'hover':False},dims))
+
+    def test_toolbar_attaches_to_image_and_ignores_unused_space(self):
+        portrait = {'w': 525, 'h': 1402, 'mt': 99, 'mb': 167}
+        self.assertEqual(toolbar_bounds(portrait), (0, 1235, 525, 1303))
+        self.assertEqual(toolbar_action({'x': 220, 'y': 1270, 'hover': True}, portrait), 'home')
+        self.assertIsNone(toolbar_action({'x': 220, 'y': 1320, 'hover': True}, portrait))
+        wide = {'w': 800, 'h': 600, 'ml': 180, 'mr': 260, 'mt': 64, 'mb': 132}
+        self.assertEqual(toolbar_bounds(wide), (180, 468, 540, 536))
+        self.assertEqual(toolbar_action({'x': 300, 'y': 500, 'hover': True}, wide), 'home')
+        self.assertEqual(toolbar_action({'x': 400, 'y': 500, 'hover': True}, wide), 'search')
+        self.assertEqual(toolbar_action({'x': 500, 'y': 500, 'hover': True}, wide), 'audio')
+        for x, y in ((100, 500), (600, 500), (500, 550), (500, 467), (540, 500)):
+            with self.subTest(x=x, y=y):
+                self.assertIsNone(toolbar_action({'x': x, 'y': y, 'hover': True}, wide))
 
     def test_letterbox(self):
         dims = {'w': 600, 'h': 1000, 'ml': 100, 'mr': 100, 'mt': 50, 'mb': 50}

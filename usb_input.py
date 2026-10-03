@@ -11,6 +11,8 @@ import traceback
 import time
 import os
 import shutil
+import re
+import tomllib
 from pathlib import Path
 from pymobiledevice3.remote.core_device.hid_service import (
     UniversalHIDServiceService, TOUCHSCREEN_STATE_CONTACT, TOUCHSCREEN_STATE_RELEASE,
@@ -19,8 +21,10 @@ from pymobiledevice3.remote.core_device.hid_service import (
 from pymobiledevice3.remote.core_device.vnc_server import ASCII_TO_HID
 from pymobiledevice3.remote.core_device.pasteboard_service import PasteboardService
 from orientation import (
-    TOOLBAR_RATIO, displayed_landscape, hid_from_displayed, scroll_hid_delta,
-    swapped_geometry, toolbar_ratio_for, visual_rotate,
+    TOOLBAR_HEIGHT_PX, TOOLBAR_RATIO, MAX_TOOLBAR_RATIO, displayed_landscape,
+    hid_from_displayed, scroll_hid_delta,
+    display_size_from, fitted_geometry, phone_frame_crop, swapped_geometry,
+    toolbar_ratio_for, visual_rotate,
 )
 
 SPECIAL = {'SPACE': 44, 'ENTER': 40, 'KP_ENTER': 40, 'BS': 42,
@@ -69,25 +73,75 @@ def load_ui():
         pass
     return defaults
 
-def toolbar_top(dimensions, ratio=TOOLBAR_RATIO):
-    w, h = dimensions.get('w', 0), dimensions.get('h', 0)
+def load_toolbar_colors():
+    """Read the active palette; return validated ASS (BGR) colors."""
+    config = Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home()/'.config')))
+    state = Path(os.environ.get('XDG_STATE_HOME', str(Path.home()/'.local/state')))
+    paths = (state / 'omarchy/current/theme/colors.toml',
+             Path.home() / '.local/state/omarchy/current/theme/colors.toml',
+             config / 'omarchy/current/theme/colors.toml',
+             Path.home() / '.config/omarchy/current/theme/colors.toml')
+    colors = {'background': '252525', 'foreground': 'FFFFFF'}
+    for path in paths:
+        try:
+            values = tomllib.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        for key in colors:
+            value = values.get(key)
+            if isinstance(value, str) and re.fullmatch(r'#[0-9a-fA-F]{6}', value):
+                colors[key] = (value[5:7] + value[3:5] + value[1:3]).upper()
+        break
+    return colors
+
+
+def rounded_square_ass(x, y, size, color):
+    """Draw a rounded app-style tile without an icon font."""
+    radius = min(12, size / 4)
+    control = radius * .55228475
+    edge = size - radius
+    return (rf'{{\r\an7\pos({x},{y})\bord0\shad0\1c&H{color}&\p1}}'
+            f'm {radius} 0 l {edge} 0 '
+            f'b {edge+control} 0 {size} {radius-control} {size} {radius} '
+            f'l {size} {edge} b {size} {edge+control} {edge+control} {size} {edge} {size} '
+            f'l {radius} {size} b {radius-control} {size} 0 {edge+control} 0 {edge} '
+            f'l 0 {radius} b 0 {radius-control} {radius-control} 0 {radius} 0')
+
+
+def toolbar_top(dimensions, ratio=None):
+    h = dimensions.get('h', 0)
     mb = dimensions.get('mb', 0)
     if h > 0 and mb > 0:
-        return h - mb
-    return h * (1 - ratio)
+        return max(0, h - mb)
+    return h * (1 - (toolbar_ratio_for(h) if ratio is None else ratio))
 
 
-def toolbar_action(mouse, dimensions, ratio=TOOLBAR_RATIO):
+def toolbar_bounds(dimensions, ratio=None):
+    """Attach a fixed-height strip to the displayed image, not its letterbox."""
     w, h = dimensions.get('w', 0), dimensions.get('h', 0)
+    if w <= 0 or h <= 0:
+        return None
+    left = max(0, dimensions.get('ml', 0))
+    right = min(w, w - dimensions.get('mr', 0))
+    top = min(h, toolbar_top(dimensions, ratio))
+    bottom = min(h, top + min(TOOLBAR_HEIGHT_PX, h * MAX_TOOLBAR_RATIO))
+    if right <= left or bottom <= top:
+        return None
+    return left, top, right, bottom
+
+
+def toolbar_action(mouse, dimensions, ratio=None):
+    bounds = toolbar_bounds(dimensions, ratio)
+    if bounds is None:
+        return None
+    left, top, right, bottom = bounds
     x, y = mouse.get('x', -1), mouse.get('y', -1)
-    top = toolbar_top(dimensions, ratio)
-    if (mouse.get('hover') and w > 0 and h > 0
-            and 0 <= x < w and top <= y < h):
+    if mouse.get('hover') and left <= x < right and top <= y < bottom:
         # Home | Spotlight stay split at center; speaker uses a right-edge strip.
-        audio_left = w - max(w * 0.18, 56)
+        audio_left = right - max((right - left) * 0.18, 56)
         if x >= audio_left:
             return 'audio'
-        return 'home' if x < w / 2 else 'search'
+        return 'home' if x < (left+right)/2 else 'search'
     return None
 
 def key_usages(name, text=''):
@@ -147,10 +201,21 @@ class InputBridge:
         self.device_orientation = 1
         self.buffer_w = 0
         self.buffer_h = 0
+        self.display_size = None
+        # A reconnect can reuse an MPV window with an earlier crop still active.
+        self._video_crop = None
         self.visual_rotate = 0
         self.toolbar_ratio = TOOLBAR_RATIO
         self._requested_geometry = None
+        self._geometry_source = None
+        self._view_landscape = None
+        self._last_window_size = None
+        self._resize_task = None
+        self._view_lock = asyncio.Lock()
+        self.hidpi_scale = 1.0
         self.orientation_task = None
+        self.theme_task = None
+        self.toolbar_colors = None
         self.springboard = None
         self._orientation_warned = False
 
@@ -197,36 +262,55 @@ class InputBridge:
         w, h = self.dimensions.get('w', 0), self.dimensions.get('h', 0)
         if w <= 0 or h <= 0:
             return
-        top = round(toolbar_top(self.dimensions, self.toolbar_ratio))
-        center = (top+h)/2
+        bounds = toolbar_bounds(self.dimensions, self.toolbar_ratio)
+        if bounds is None:
+            return
+        left, top, right, bottom = (round(value) for value in bounds)
+        if right <= left or bottom <= top:
+            return
+        bar_w = right-left
+        center_x, center = (left+right)/2, (top+bottom)/2
         # ASS vector background and Home icon in the reserved margin.
-        background = (r'{\an7\pos(0,0)\bord0\shad0\1c&H252525&\p1}'
-                      f'm 0 {top} l {w} {top} {w} {h} 0 {h}')
+        colors = load_toolbar_colors()
+        bgr = colors['background']
+        await self.command('set_property', 'background-color',
+                           '#' + bgr[4:6] + bgr[2:4] + bgr[0:2])
+        background = (rf'{{\an7\pos(0,0)\bord0\shad0\1c&H{colors["background"]}&\p1}}'
+                      f'm {left} {top} l {right} {top} {right} {bottom} {left} {bottom}')
         # Draw a house without relying on an installed icon font.
         ui = load_ui()
-        size = min(ui['icon_size'], (h-top)*.45)
+        tile_size = max(1, min(ui['icon_size'] + 16, bottom-top-12, bar_w*.2-8))
+        spacing = min(max(ui['button_spacing'], tile_size + 8), bar_w*.2)
+        size = min(ui['icon_size'], tile_size - 2*min(8, tile_size/5))
         scale = size/24
-        spacing = min(ui['button_spacing'], w*.2)
-        y = center-size/2
-        home_x = w/2-spacing/2-size/2
-        icon = (rf'{{\an7\pos({home_x},{y})\bord0\shad0\1c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
+        # Mix the theme foreground into the background for a soft tile surface.
+        tile_color = ''.join(
+            f'{round(int(colors["background"][i:i+2], 16)*.88 + int(colors["foreground"][i:i+2], 16)*.12):02X}'
+            for i in (0, 2, 4))
+        tiles = [rounded_square_ass(center_x + offset - tile_size/2, center-tile_size/2,
+                                    tile_size, tile_color)
+                 for offset in (-spacing/2, spacing/2)]
+        x, y = center_x-spacing/2-size/2, center-size/2
+        icon = (rf'{{\an7\pos({x},{y})\bord0\shad0\1c&H{colors["foreground"]}&\fscx{scale*100}\fscy{scale*100}\p1}}'
                 'm 12 1 l 1 11 3 13 5 11 5 23 10 23 10 16 14 16 14 23 19 23 19 11 21 13 23 11 12 1')
-        search_x = w/2+spacing/2-size/2
-        search = (rf'{{\an7\pos({search_x},{y})\bord2\shad0\1a&HFF&\3c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
+        search_x = center_x+spacing/2-size/2
+        search = (rf'{{\an7\pos({search_x},{y})\bord2\shad0\1a&HFF&\3c&H{colors["foreground"]}&\fscx{scale*100}\fscy{scale*100}\p1}}'
                   'm 10 2 b 5.6 2 2 5.6 2 10 b 2 14.4 5.6 18 10 18 '
                   'b 14.4 18 18 14.4 18 10 b 18 5.6 14.4 2 10 2 '
                   'm 16 16 l 23 23')
         pad = max(8.0, size * 0.4)
-        audio_x = w - size - pad
+        audio_x = right - size - pad
         if audio_x < search_x + size:
             audio_x = search_x + size + pad
-        # Unavailable is a gray speaker with an X. Muted is a white speaker
+        tiles.append(rounded_square_ass(audio_x + size/2 - tile_size/2,
+                                        center-tile_size/2, tile_size, tile_color))
+        # Unavailable is a gray speaker with an X. Muted is a themed speaker
         # with one slash. Unmuted adds waves. An X is not the mute glyph, so
         # a dead player is not drawn as if it were playing.
         if not self.audio_available:
             speaker_color = r'&H808080&'
         else:
-            speaker_color = r'&HFFFFFF&'
+            speaker_color = f'&H{colors["foreground"]}&'
         speaker = (rf'{{\an7\pos({audio_x},{y})\bord0\shad0\1c{speaker_color}\fscx{scale*100}\fscy{scale*100}\p1}}'
                    'm 2 9 l 8 9 14 4 14 20 8 15 2 15')
         if not self.audio_available:
@@ -234,15 +318,30 @@ class InputBridge:
                     'm 4 4 l 20 20 m 20 4 l 4 20')
             audio_events = [speaker, mark]
         elif self.audio_muted:
-            slash = (rf'{{\an7\pos({audio_x},{y})\bord2\shad0\1a&HFF&\3c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
+            slash = (rf'{{\an7\pos({audio_x},{y})\bord2\shad0\1a&HFF&\3c{speaker_color}\fscx{scale*100}\fscy{scale*100}\p1}}'
                      'm 4 4 l 20 20')
             audio_events = [speaker, slash]
         else:
-            waves = (rf'{{\an7\pos({audio_x},{y})\bord2\shad0\1a&HFF&\3c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
+            waves = (rf'{{\an7\pos({audio_x},{y})\bord2\shad0\1a&HFF&\3c{speaker_color}\fscx{scale*100}\fscy{scale*100}\p1}}'
                      'm 17 8 b 20 12 20 12 17 16 m 19 6 b 24 12 24 12 19 18')
             audio_events = [speaker, waves]
         await self.command('osd-overlay', 61, 'ass-events',
-                           '\n'.join([background, icon, search, *audio_events]), w, h)
+                           '\n'.join([background, *tiles, icon, search, *audio_events]), w, h)
+        self.toolbar_colors = colors
+
+    async def theme_loop(self):
+        warned = False
+        while True:
+            await asyncio.sleep(1)
+            try:
+                if load_toolbar_colors() != self.toolbar_colors:
+                    await self.draw_toolbar()
+                warned = False
+            except Exception as error:
+                if not warned:
+                    logging.getLogger('iphone-mirror.input').warning(
+                        'Theme poll failed (%s)', type(error).__name__)
+                    warned = True
 
     async def search_button(self):
         """Request Spotlight with Command+Space; no touch gesture."""
@@ -389,36 +488,194 @@ class InputBridge:
                     await asyncio.wait_for(self.hid.send_keyboard(self.keyboard, []), 1)
                     self.reported_keys.clear()
 
-    async def apply_view(self):
-        rotate = visual_rotate(self.device_orientation, self.buffer_w, self.buffer_h)
-        landscape = displayed_landscape(self.buffer_w, self.buffer_h, rotate)
+    async def load_display_size(self):
+        from pymobiledevice3.remote.core_device.device_info import DeviceInfoService
+        try:
+            async with asyncio.timeout(3):
+                async with DeviceInfoService(self.rsd) as service:
+                    self.display_size = display_size_from(await service.get_display_info())
+        except Exception as error:
+            logging.getLogger('iphone-mirror.input').warning(
+                'Display size unavailable (%s)', type(error).__name__)
+
+    async def apply_view(self, *, settled=False):
+        async with self._view_lock:
+            await self._apply_view(settled=settled)
+
+    async def _apply_view(self, *, settled=False):
+        active_w, active_h, crop = phone_frame_crop(self.buffer_w, self.buffer_h, self.display_size)
+        if crop != self._video_crop:
+            await self.command('set_property', 'video-crop', crop)
+            self._video_crop = crop
+        rotate = visual_rotate(self.device_orientation, active_w, active_h)
+        landscape = displayed_landscape(active_w, active_h, rotate)
         w, h = self.dimensions.get('w', 0), self.dimensions.get('h', 0)
-        target_h = min(w, h) if landscape and w > 0 and h > 0 else (max(w, h) if w > 0 and h > 0 else h)
-        ratio = toolbar_ratio_for(target_h)
+        window = None
+        use_hyprland = self.player_pid and shutil.which('hyprctl')
+        if use_hyprland:
+            window = await self.hypr_window()
+            if window is None or not window.get('floating'):
+                self._requested_geometry = None
+                self._geometry_source = None
+                self._view_landscape = None
+                self._last_window_size = None
+                await self.cancel_resize()
+        if landscape != self._view_landscape:
+            await self.cancel_resize()
+        compositor_size = None
+        if window and isinstance(window.get('size'), list) and len(window['size']) == 2:
+            compositor_size = tuple(round(value * self.hidpi_scale) for value in window['size'])
+            if settled:
+                w, h = compositor_size
+        acknowledged = self.geometry_matches((w, h), self._requested_geometry)
+        queued_resize = (self._requested_geometry is not None and not acknowledged
+                         and landscape == self._view_landscape
+                         and ((w, h) == self._geometry_source
+                              or self.geometry_matches(compositor_size, self._requested_geometry)))
+        if acknowledged:
+            self._requested_geometry = None
+            self._geometry_source = None
+        resize_axis = None
+        if (not acknowledged and not queued_resize and self._last_window_size
+                and landscape == self._view_landscape):
+            old_w, old_h = self._last_window_size
+            # Completion uses a rounding tolerance, but every manual step must
+            # select an axis and keep the pre-resize comparison size.
+            dw, dh = abs(w - old_w), abs(h - old_h)
+            if dw > 0:
+                resize_axis = 'width'
+            elif dh > 0:
+                resize_axis = 'height'
+        if resize_axis is not None and not settled:
+            await self.queue_resize()
+            geom = None
+        elif queued_resize:
+            geom = self._requested_geometry
+        else:
+            geom = fitted_geometry(w, h, active_w, active_h, rotate,
+                                   self._view_landscape, resize_axis)
+            if geom is None:
+                geom = swapped_geometry(w, h, landscape)
+        if (active_w > 0 and active_h > 0
+                and (not use_hyprland or (window and window.get('floating')))):
+            self._view_landscape = landscape
+            if resize_axis is None or settled:
+                self._last_window_size = (w, h)
+        # Use the actual height, including when the compositor rejects a resize.
+        ratio = toolbar_ratio_for(self.dimensions.get('h', 0))
         if rotate != self.visual_rotate:
             self.visual_rotate = rotate
             await self.command('set_property', 'video-rotate', rotate)
-        if abs(ratio - self.toolbar_ratio) > .001:
+        if ratio != self.toolbar_ratio:
             self.toolbar_ratio = ratio
             await self.command('set_property', 'video-margin-ratio-bottom', ratio)
-        geom = swapped_geometry(w, h, landscape)
-        if geom is not None and geom != self._requested_geometry:
-            self._requested_geometry = geom
-            await self.resize_window(*geom)
-        elif geom is None:
-            self._requested_geometry = None
+        if (geom is not None and (not use_hyprland or (window and window.get('floating')))
+                and not self.geometry_matches(geom, (w, h))
+                and not self.geometry_matches(geom, self._requested_geometry)):
+            adjust_axis = None
+            if settled and resize_axis is not None:
+                adjust_axis = 'height' if resize_axis == 'width' else 'width'
+            requested = await self.resize_window(*geom, window=window, adjust_axis=adjust_axis)
+            if requested is not None:
+                self._requested_geometry = requested
+                self._geometry_source = (w, h)
 
-    async def resize_window(self, width, height):
-        await self.command('set_property', 'geometry', f'{int(width)}x{int(height)}')
+    async def cancel_resize(self):
+        task, self._resize_task = self._resize_task, None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    async def queue_resize(self):
+        await self.cancel_resize()
+        self._resize_task = asyncio.create_task(self.resize_after_pause())
+
+    async def resize_after_pause(self):
+        try:
+            # This observes dimension events, not keys or pointer actions.
+            await asyncio.sleep(.2)
+            await self.apply_view(settled=True)
+        except Exception as error:
+            logging.getLogger('iphone-mirror.input').warning(
+                'Window adjustment failed (%s)', type(error).__name__)
+        finally:
+            if self._resize_task is asyncio.current_task():
+                self._resize_task = None
+
+    def geometry_matches(self, first, second):
+        if first is None or second is None:
+            return False
+        tolerance = max(1.0, self.hidpi_scale)
+        return all(abs(a - b) <= tolerance for a, b in zip(first, second))
+
+    async def resize_window(self, width, height, *, window=None, adjust_axis=None):
         pid = self.player_pid
-        if not pid or not shutil.which('hyprctl'):
-            return
+        use_hyprland = pid and shutil.which('hyprctl')
+        if not use_hyprland:
+            await self.command('set_property', 'geometry', f'{int(width)}x{int(height)}')
+            return int(width), int(height)
+        if window is None:
+            window = await self.hypr_window()
+        if window is None or not window.get('floating'):
+            return None
+        # MPV supplies the scale directly; queued OSD events need no client-size match.
+        scale = self.hidpi_scale
+        width, height = max(1, round(width / scale)), max(1, round(height / scale))
+        # Manual adjustments change only the other axis. Relative zero on the
+        # chosen axis preserves the compositor's width even if another key fires.
+        x, y, relative = width, height, False
+        size = window.get('size')
+        if adjust_axis is not None:
+            if not isinstance(size, list) or len(size) != 2:
+                return None
+            relative = True
+            x = width - size[0] if adjust_axis == 'width' else 0
+            y = height - size[1] if adjust_axis == 'height' else 0
+        # Hyprland 0.55+ uses Lua dispatchers; older releases use strings.
+        resize = (f'hl.dsp.window.resize({{ x = {int(x)}, y = {int(y)}, '
+                  f'relative = {str(relative).lower()}, window = "pid:{int(pid)}" }})')
+        legacy = (str(int(x)), f'{int(y)},pid:{int(pid)}')
+        if not relative:
+            legacy = ('exact', *legacy)
+        if await self.hypr_dispatch(resize):
+            if await self.hypr_dispatch('resizewindowpixel', *legacy):
+                logging.getLogger('iphone-mirror.input').warning('Window resize failed')
+                return None
+        return round(width * scale), round(height * scale)
+
+    async def hypr_window(self):
         proc = await asyncio.create_subprocess_exec(
-            'hyprctl', 'dispatch', 'resizewindowpixel', 'exact',
-            str(int(width)), f'{int(height)},pid:{int(pid)}',
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(proc.wait(), 2)
+            'hyprctl', '-j', 'clients', stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL)
+        try:
+            data, _ = await asyncio.wait_for(proc.communicate(), 2)
+            if proc.returncode == 0:
+                return next((window for window in json.loads(data)
+                             if window.get('pid') == self.player_pid), None)
+        except (ValueError, asyncio.TimeoutError):
+            return None
+        finally:
+            if proc.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                await proc.wait()
+
+    async def hypr_dispatch(self, *args):
+        proc = await asyncio.create_subprocess_exec(
+            'hyprctl', 'dispatch', *args,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            reply, _ = await asyncio.wait_for(proc.communicate(), 2)
+            # Older hyprctl returns zero even when the server rejects a dispatcher.
+            return 0 if proc.returncode == 0 and reply.strip() == b'ok' else 1
+        except asyncio.TimeoutError:
+            return 1
+        finally:
+            if proc.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                await proc.wait()
 
     async def orientation_loop(self):
         from pymobiledevice3.services.springboard import SpringBoardServicesService
@@ -456,6 +713,12 @@ class InputBridge:
                     await asyncio.wait_for(service.close(), 1)
 
     async def close(self):
+        await self.cancel_resize()
+        if self.theme_task is not None:
+            task, self.theme_task = self.theme_task, None
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         if self.orientation_task is not None:
             task, self.orientation_task = self.orientation_task, None
             task.cancel()
@@ -615,19 +878,29 @@ class InputBridge:
                 await asyncio.sleep(.1)
         else:
             raise RuntimeError('Viewer input socket did not become available')
-        for i, name in enumerate(('focused', 'mouse-pos', 'osd-dimensions', 'video-params')):
+        if self.rsd is not None:
+            await self.load_display_size()
+        for i, name in enumerate(('display-hidpi-scale', 'focused', 'mouse-pos', 'osd-dimensions', 'video-params')):
             await self.command('observe_property', i, name)
         # Preserve window-manager close requests instead of forwarding them.
         await self.command('define-section', 'usb-input', input_bindings(), 'force')
         await self.command('enable-section', 'usb-input', 'exclusive')
         self.orientation_task = asyncio.create_task(self.orientation_loop())
+        self.theme_task = asyncio.create_task(self.theme_loop())
         self.ready.set()
         try:
             while line := await reader.readline():
                 event = json.loads(line)
                 if event.get('event') == 'property-change':
                     name, value = event.get('name'), event.get('data')
-                    if name == 'focused':
+                    if name == 'display-hidpi-scale':
+                        if type(value) in (int, float) and math.isfinite(value) and value > 0:
+                            self.hidpi_scale = float(value)
+                            self._requested_geometry = None
+                            self._geometry_source = None
+                            self._last_window_size = None
+                            await self.cancel_resize()
+                    elif name == 'focused':
                         self.focused = value is True
                         if not self.focused:
                             await self.release()
