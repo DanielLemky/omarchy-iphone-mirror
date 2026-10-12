@@ -198,8 +198,35 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_usb_tethering_route_rejected(self):
         process=Mock(returncode=0,communicate=AsyncMock(return_value=(b'[{"dev":"usb0"}]',b'')))
-        with patch('connection.asyncio.create_subprocess_exec',AsyncMock(return_value=process)), \
+        with patch('connection.asyncio.create_subprocess_exec',AsyncMock(return_value=process)) as ip, \
              patch('connection.Path.resolve',return_value=SimpleNamespace(name='ipheth')):
             self.assertFalse(await connection.network_route_allowed('192.0.2.1'))
+        self.assertEqual(ip.await_args.args[4],'192.0.2.1')
+
+    async def test_zoned_link_local_is_allowed_without_route_get(self):
+        with patch('connection.asyncio.create_subprocess_exec',AsyncMock()) as ip:
+            self.assertTrue(await connection.network_route_allowed('fe80::1%wlan0'))
+        ip.assert_not_called()
+
+    async def test_zoned_link_local_reaches_remote_pairing(self):
+        answer=SimpleNamespace(port=123,addresses=[SimpleNamespace(full_ip='fe80::1%wlan0')])
+        provider=Mock()
+        with patch('connection.iter_remote_paired_identifiers',return_value=['phone']), \
+             patch('connection.browse_remotepairing',AsyncMock(return_value=[answer])), \
+             patch('connection.connect_wifi',AsyncMock(return_value=provider)) as connect:
+            self.assertEqual(await connection.wifi_provider(None),(provider,None))
+        self.assertEqual(connect.await_args.args[:3],('phone','fe80::1%wlan0',123))
+
+    async def test_zoned_tether_is_not_eligible(self):
+        answer=SimpleNamespace(port=123,addresses=[SimpleNamespace(full_ip='fe80::1%usb0')])
+        with patch('connection.iter_remote_paired_identifiers',return_value=['phone']), \
+             patch('connection.WIFI_PROVIDER_TIMEOUT',.04), \
+             patch('connection.WIFI_RETRY_DELAY',.01), \
+             patch('connection.browse_remotepairing',AsyncMock(return_value=[answer])), \
+             patch('connection.connect_wifi',AsyncMock()) as connect, \
+             patch('connection.Path.resolve',return_value=SimpleNamespace(name='ipheth')):
+            with self.assertRaises(connection.WifiDiscoveryError):
+                await connection.wifi_provider(None)
+        connect.assert_not_called()
 
 if __name__=='__main__': unittest.main()

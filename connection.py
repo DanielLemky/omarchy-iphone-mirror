@@ -44,10 +44,27 @@ async def select_connection(mode, serial=None):
         return 'wifi', serial
     raise RuntimeError('No matching USB iPhone is connected.')
 
+def interface_allowed(dev):
+    """Wi-Fi mode stays on a LAN interface. USB tethering and tunnels are not Wi-Fi."""
+    if not dev or dev=='lo' or dev.startswith(('tailscale','tun','utun')):
+        return False
+    driver = Path('/sys/class/net')/dev/'device/driver'
+    try:
+        name = driver.resolve().name
+    except OSError:
+        return True
+    return name != 'ipheth'
+
 async def network_route_allowed(address):
     """Reject USB tethering and tunnel interfaces; Wi-Fi mode must be LAN-only."""
-    ipaddress.ip_address(address.split('%',1)[0])
-    proc = await asyncio.create_subprocess_exec('ip','-j','route','get',address,
+    bare, separator, zone = address.partition('%')
+    ipaddress.ip_address(bare)
+    # iproute2 treats "%" as a prefix length, so "ip route get fe80::addr%iface"
+    # fails. That rejected every link-local iPhone advertisement. The zone is
+    # already the outgoing interface.
+    if separator:
+        return interface_allowed(zone)
+    proc = await asyncio.create_subprocess_exec('ip','-j','route','get',bare,
             stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL)
     try:
         data, _ = await asyncio.wait_for(proc.communicate(),2)
@@ -60,11 +77,7 @@ async def network_route_allowed(address):
     routes = json.loads(data)
     if not routes:
         return False
-    dev = routes[0].get('dev','')
-    if not dev or dev=='lo' or dev.startswith(('tailscale','tun','utun')):
-        return False
-    driver = Path('/sys/class/net')/dev/'device/driver'
-    return driver.resolve().name != 'ipheth'
+    return interface_allowed(routes[0].get('dev',''))
 
 async def connect_wifi(identifier, address, port, *, timeout=8):
     service = RemotePairingTunnelService(identifier,address,port)
